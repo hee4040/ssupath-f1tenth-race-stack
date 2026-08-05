@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 파라미터 파일 경로 -->
+  <arg name="mpcc_param_file" 
+       default="$(find-pkg-share mpcc_ros)/config/mpcc_sim.yaml"/>
+
+  <!-- RViz 설정 파일 경로 -->
+  <arg name="rviz_config"
+       default="/home/misys/forza_ws/race_stack/mpcc_sim.rviz"/>
+
+  <!-- MPCC Node 실행 -->
+  <node
+    pkg="mpcc_ros"
+    exec="mpcc_node_sim"
+    name="mpcc_node"
+    output="screen">
+    <param from="$(var mpcc_param_file)"/>
+  </node>
+
+  <!-- RViz2 실행 -->
+  <node
+    pkg="rviz2"
+    exec="rviz2"
+    name="rviz2"
+    output="screen"
+    args="-d $(var rviz_config)">
+  </node>
+
+</launch>

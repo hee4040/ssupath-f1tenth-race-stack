@@ -1,0 +1,8 @@
+<launch>
+    <arg name="param_file" default="$(find-pkg-share stack_master)/config/offline_params.yaml"/>
+
+    <node pkg="corridor_generator" exec="corridor_generator" name="corridor_generator" output="screen">
+        <param from="$(var param_file)" />
+    </node>
+
+</launch>

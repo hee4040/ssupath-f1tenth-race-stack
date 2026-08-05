@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 파라미터 파일 경로 -->
+  <arg name="mpcc_param_file" 
+       default="$(find-pkg-share mpcc_ros)/config/mpcc.yaml"/>
+
+  <!-- MPCC Node 실행 -->
+  <node
+    pkg="mpcc_ros"
+    exec="mpcc_node"
+    name="mpcc_node"
+    output="screen">
+    <param from="$(var mpcc_param_file)"/>
+  </node>
+
+</launch>

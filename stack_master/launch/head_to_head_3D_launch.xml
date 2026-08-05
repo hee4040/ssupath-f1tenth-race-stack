@@ -1,0 +1,46 @@
+<launch>
+    <arg name="racecar_version" default="NUC2" />
+    <arg name="LU_table" default="NUC2_hangar_pacejka" />
+    <arg name="overtake_mode" default="spliner" /> <!--  spliner / graph_based -->
+    <arg name="ctrl_algo" default="PP"/> <!-- MAP / PP -->
+    <arg name="measure" default="False" />
+
+
+    <!-- launch state machine -->
+    <include file="$(find-pkg-share state_machine)/launch/state_machine_launch.xml">
+        <arg name="mode" value="head_to_head"/>
+        <arg name="overtake_mode" value="$(var overtake_mode)"/>
+    </include>
+    
+    <!-- SPLINE PLANNER-->
+    <!-- this is actually the only way this works -->
+   <!-- <group if="$(eval '\'$(var overtake_mode)\' == \'spliner\'')">
+       <include file="$(find-pkg-share graph_planner)/launch/graph_planner_launch.xml">
+           <arg name="param_file" value="$(find-pkg-share stack_master)/config/offline_params.yaml"/>
+       </include>
+      
+   </group> -->
+
+    <group if="$(eval '\'$(var overtake_mode)\' == \'spliner\'')">
+        <include file="$(find-pkg-share graph_planner)/launch/graph_planner_launch.xml" />
+    </group>
+
+    <!-- CONTROLLER (l1_controller + mux_controller -> /drive 발행)
+         ctrl_algo 가 선언만 되어 있고 컨트롤러가 어디서도 launch 되지 않아 /drive 가 비어 있었음
+         (time_trials_launch.xml / head_to_head_fsdp_launch.xml 과 동일한 누락).
+         state machine 이 내는 /local_waypoints 를 l1_controller 가 따라간다. -->
+    <include file="$(find-pkg-share controller_manager)/launch/mux_controller_f110_launch.xml">
+        <arg name="mode" value="$(var ctrl_algo)"/>
+        <arg name="LU_table" value="$(var LU_table)"/>
+        <arg name="racecar_version" value="$(var racecar_version)"/>
+    </include>
+
+    <!-- PERCEPTION -->
+    <!-- 새 perception 스택의 통합 런치.
+         passthrough -> ray_ground_filter -> euclidean_cluster -> cluster_to_obstacle
+         + pc2_to_scan + tracking 을 한 번에 띄운다.
+         (tracking 파라미터는 full_perception.launch.xml 안에서
+          stack_master/config/opponent_tracker_params.yaml 로 지정된다) -->
+    <include file="$(find-pkg-share tracking)/launch/full_perception.launch.xml" />
+
+</launch>

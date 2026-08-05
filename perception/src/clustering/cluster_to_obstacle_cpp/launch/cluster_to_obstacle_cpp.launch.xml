@@ -1,0 +1,21 @@
+<launch>
+  <!-- arg 선언 -->
+  <arg name="cluster_to_obstacle_param_file"
+       default="$(find-pkg-share cluster_to_obstacle_cpp)/config/cluster_to_obstacle_node.param.yaml"/>
+  <!-- 실차에서는 false. true 로 하드코딩하면 /clock 을 기다리느라 노드가 멈춘다.
+       rosbag/시뮬레이션 재생 시에만 use_sim_time:=true 로 넘길 것. -->
+  <arg name="use_sim_time" default="false"/>
+
+  <!-- 노드 실행 -->
+  <node pkg="cluster_to_obstacle_cpp"
+        exec="cluster_to_obstacle_node"
+        name="cluster_to_obstacle"
+        output="screen">
+
+    <!-- ROS2 XML에서 param file 불러오는 올바른 문법 -->
+    <param from="$(var cluster_to_obstacle_param_file)" />
+
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+
+  </node>
+</launch>

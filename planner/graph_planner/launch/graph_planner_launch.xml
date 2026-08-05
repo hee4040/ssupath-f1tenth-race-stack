@@ -1,0 +1,8 @@
+<launch>
+    <arg name="param_file" default="$(find-pkg-share stack_master)/config/offline_params.yaml"/>
+
+    <node pkg="graph_planner" exec="graph_planner" name="graph_planner" output="screen">
+        <param from="$(var param_file)" />
+    </node>
+
+</launch>

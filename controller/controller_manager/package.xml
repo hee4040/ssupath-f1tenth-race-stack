@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>controller_manager</name>
+  <version>0.0.0</version>
+  <description>Top-level controller that switches between MPCC and L1controller</description>
+
+  <maintainer email="junseong@example.com">Gwak Jun Seong</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- 빌드 도구 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 빌드/실행에 필요한 패키지들 -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>f110_msgs</depend>
+  <depend>mpcc_controller</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

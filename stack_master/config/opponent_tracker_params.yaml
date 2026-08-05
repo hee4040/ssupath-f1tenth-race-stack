@@ -1,0 +1,44 @@
+# tracking 노드(perception/src/tracking) 파라미터.
+#
+# ★ 2026-08-04 발견: 최상위 키가 `perception:` 이었으나 노드 이름은 `tracking` 이다
+#   (tracking_launch.xml 의 name="tracking", 네임스페이스 push 없음).
+#   ROS2 는 최상위 키를 노드 이름과 매칭하므로 이 파일은 **통째로 무시되고 있었고**,
+#   트래커는 전부 tracking.cpp 의 declare_parameter 기본값으로 돌아왔다.
+#   일부러 끊어둔 게 아니라 upstream ForzaETH 잔재다 — 원래 stack 은 `perception`
+#   이라는 노드 하나가 detect/tracking 를 하위 네임스페이스로 갖는 구조였는데,
+#   이 저장소가 C++ 로 재작성하면서 노드를 쪼개고 yaml 은 안 고쳤다.
+#   키는 `tracking:` 으로 바로잡았다.
+#
+# ★ 단, **지금은 아무 값도 활성화하지 않는다.** 이 파일이 죽어 있던 동안의
+#   모든 튜닝이 cpp 기본값 기준으로 이뤄졌으므로, 값을 켜는 순간 그 전제가 깨진다.
+#   2026-08-04 에 max_dist/dist_infront/dist_deletion 3개를 켰다가 원복했다 —
+#   이유는 아래 "왜 원복했나" 참조.
+#
+# === 왜 원복했나 (obs_debug_0804_1612 실측) ===
+#   퍼셉션의 진짜 상한은 여기가 아니라 passthrough_filter_node.param.yaml 의
+#   크롭 박스(x[-4,4] y[-7,0] z[0.01,0.3]) 다. **전방 7 m 밖의 점군이 아예 없다.**
+#   따라서 dist_infront 를 7 -> 12 로 올려도 통과시킬 장애물 자체가 존재하지 않고
+#   (7 m 초과 검출 0.9%), 남는 건 트랙을 오래 살려두는 부작용뿐이었다.
+#   max_dist 완화(0.5 -> 1.5)도 마찬가지로 이득 없이 오검출 병합 위험만 늘렸다.
+#   실제로 이 3개를 켠 주행에서 "일반 주행이 굼떠졌다"는 보고가 나왔다.
+#   -> 거리를 늘리려면 크롭 박스부터 키우고, 그다음 여기를 맞춰야 한다.
+#
+# === 값을 켤 때 반드시 확인할 것 (괄호 = tracking.cpp 기본값) ===
+#   아래를 그대로 풀면 4개가 동시에 바뀐다. 하나씩 A/B 할 것.
+#
+#   P_vs: 0.0002              # (cpp 0.2)  1000배 차이!
+#   measurment_var_vs: 0.002  # (cpp 0.2)  100배 차이
+#   measurment_var_vd: 0.002  # (cpp 0.2)  100배 차이
+#   var_pub: 3                # (cpp 1.0)
+#
+#   아래는 cpp 기본값과 같아서 켜도 효과 없음:
+#   rate: 40 / P_d: 0.02 / P_vd: 0.2 / measurment_var_s: 0.002
+#   measurment_var_d: 0.002 / process_var_vs: 2 / process_var_vd: 8
+#   max_dist: 0.5
+#
+#   거리 관련 (크롭 박스를 키운 뒤에 같이 올릴 것):
+#   dist_infront: 7.0   # (cpp 7.0) 이 거리보다 먼 앞쪽 장애물은 추적/발행 안 함
+#   dist_deletion: 6.0  # (cpp 6.0) 정적 트랙 유지 거리
+
+tracking:
+  ros__parameters: {}

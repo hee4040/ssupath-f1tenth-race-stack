@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>mpcc_json_tools</name>
+  <version>0.0.1</version>
+  <description>
+    Utilities for generating MPCC track.json, bounds.json, and normalization.json
+    from centerline waypoints.
+  </description>
+
+  <maintainer email="misys@todo.todo">misys</maintainer>
+  <license>MIT</license>
+
+  <!-- Build system -->
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Runtime dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>f110_msgs</exec_depend>
+  <exec_depend>numpy</exec_depend>
+
+  <!-- Optional but good practice -->
+  <test_depend>pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

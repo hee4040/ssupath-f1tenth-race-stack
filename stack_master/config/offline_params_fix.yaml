@@ -1,0 +1,41 @@
+graph_planner:
+  ros__parameters:
+    rl_kappa: 9
+    rl_s: 7
+
+    # offline
+    lat_resolution: 0.01 
+    variable_heading: true
+    d_straight: 1.8
+    d_curve: 0.8
+    curve_thr: 0.02
+    lat_offset: 0.5
+    max_lat_steps: 1.5
+    virt_goal_n: true
+    min_vel_race: 0.5
+    max_lateral_accel: 3.0
+    closure_detection_dist: 20.0
+
+    initial_layer: 4
+    vel_decrease_lat: 0.1
+    evasion_length: 6.0
+
+    stepsize_approx: 2.5
+    no_interp_points: 50
+
+    veh_width: 0.28
+    veh_length: 0.535
+    veh_turn: 0.5
+    vel_max: 8.0
+    gg_scale: 0.5
+
+    w_raceline: 0.5
+    w_raceline_sat: 8.0
+    w_length: 0.0
+    w_curv_avg: 12000.0
+    w_curv_peak: 70000.0
+    w_virt_goal: 10000.0
+
+    max_heading_offset: 0.7853981633974483
+    map_name: "hall_1030"
+    csv_output_path: "/home/misys/forza_ws/race_stack/stack_master/maps/"

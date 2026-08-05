@@ -1,0 +1,112 @@
+<launch>
+    <!-- FSDP(planner/fsdp) 오버테이킹 플래너용 런치.
+         time_trials_launch.xml 과 같은 구조(state machine + controller)에
+         오버테이킹 플래너로 FSDP 를 얹은 형태이다.
+
+         전제: base_system_launch.xml (또는 base_system_3D_launch.xml) 이 먼저 떠 있어야 한다.
+               - /global_waypoints, /global_waypoints_scaled (global_republisher)
+               - /car_state/frenet/odom, /car_state/odom, /car_state/pose (state estimation)
+               - ot_interpolator (state machine 이 OT sector 파라미터를 서비스로 읽어감)
+
+         주의: time_trials_launch.xml / head_to_head_launch.xml 과 같이 띄우면 안 된다.
+               (state machine, controller, otwpnts 발행자가 중복된다) -->
+
+    <arg name="racecar_version" default="NUC2" />  <!-- SIM / NUC1 / NUC2 / NUC3 ... -->
+    <arg name="LU_table" default="NUC2_hangar_pacejka" />
+    <arg name="ctrl_algo" default="PP" />         <!-- MAP / PP / MPCC -->
+    <arg name="measure" default="False" />         <!-- time_trials_launch.xml 과 동일하게 인터페이스만 유지 -->
+
+    <arg name="perception" default="True" />               <!-- 상대차 추적 (tracking -> /perception/obstacles) -->
+    <arg name="detection_3d" default="True" />             <!-- 3D 라이다 검출 체인 (base_system_3D 와 세트) -->
+    <arg name="launch_gp" default="True" />                <!-- FSDP GP 상대궤적 예측 체인 -->
+    <arg name="launch_waypoint_updater" default="True" />  <!-- /global_waypoints_updated 발행 -->
+
+    <!-- FSDP 회피 튜닝. 트랙 폭에 직접 묶여 있으므로 맵을 바꾸면 반드시 재확인한다.
+
+         evasion_dist 는 "장애물 표면 ~ 차체" 여유다 (반차폭은 코드가 따로 더한다).
+         회피가 성립하려면 대략
+           evasion_dist <= (장애물 끝 ~ 트랙 경계) - 0.1 - 차폭
+         이면 된다. 좁아서 안 되면 min_evasion_dist 까지 자동으로 완화되고,
+         그래도 안 되면 회피를 포기하고 trailing 한다(정지가 충돌보다 안전).
+
+         width_car 는 실측 0.28 (2026-07-31). 바꾸면 graph_planner 의 offline_params.yaml
+         veh_width 와 state_machine_params.yaml 의 lateral_width_ot_m 도 같이 맞춰야 한다. -->
+    <arg name="width_car" default="0.28" />
+    <arg name="evasion_dist" default="0.15" />
+    <arg name="min_evasion_dist" default="0.05" />
+    <arg name="spline_bound_mindist" default="0.05" />
+    <arg name="avoid_static_obs" default="True" />         <!-- 정적 장애물 회피 on/off -->
+
+    <!-- 1) state machine
+         FSDP 는 오버테이킹 플래너이므로 반드시 head_to_head 모드여야 한다.
+         timetrials 모드에서는 state_machine 이 /planner/avoidance/otwpnts 를 구독조차 하지 않아
+         FSDP 가 만든 궤적이 그대로 버려진다.
+         overtake_mode 는 state_machine_params.py 에서 "spliner" 로 고정되어 있고,
+         FSDP 는 predictive-spliner 와 같은 인터페이스(otwpnts)를 쓰므로 그대로 두면 된다.
+         state machine 이 /ot_section_check (Bool) 도 발행한다 -> FSDP sqp 노드의 회피 계산 게이팅. -->
+    <include file="$(find-pkg-share state_machine)/launch/state_machine_launch.xml">
+        <arg name="mode" value="head_to_head"/>
+    </include>
+
+    <!-- 2) 3D 라이다 검출 체인 (head_to_head_3D_launch.xml 과 동일 구성)
+         /livox/lidar -> passthrough -> /passthrough/lidar -> ray_ground -> /ground_segmentation/lidar
+         -> euclidean_cluster -> /clusters -> cluster_to_obstacle -> /perception/detection/raw_obstacles
+         + /ground_segmentation/lidar -> pc2_to_laserscan -> /scan (tracking 의 정적/동적 판별에 필요)
+         base_system_3D_launch.xml 은 이 체인을 띄우지 않으므로 여기서 같이 띄운다.
+         2D 라이다(base_system_launch.xml)를 쓰면 detection_3d:=False 로 끈다.
+         여기서는 detection_3d / perception 토글을 따로 두기 위해 tracking 패키지의
+         full_perception.launch.xml 대신 개별 체인을 나열한다. -->
+    <group if="$(var detection_3d)">
+        <include file="$(find-pkg-share autoware_pointcloud_preprocessor)/launch/passthrough_filter.launch.xml" />
+        <include file="$(find-pkg-share autoware_ground_segmentation)/launch/ray_ground_filter.launch.xml" />
+        <include file="$(find-pkg-share autoware_euclidean_cluster)/launch/euclidean_cluster.launch.xml" />
+        <include file="$(find-pkg-share cluster_to_obstacle_cpp)/launch/cluster_to_obstacle_cpp.launch.xml" />
+        <include file="$(find-pkg-share pc2_to_scan_cpp)/launch/pc2_to_laserscan.launch.xml" />
+    </group>
+
+    <!-- 3) 상대차 추적 (/perception/detection/raw_obstacles -> /perception/obstacles)
+         FSDP 의 collision_prediction / sqp_avoidance / opponent_trajectory 가 모두 이 토픽에 의존한다. -->
+    <group if="$(var perception)">
+        <include file="$(find-pkg-share tracking)/launch/tracking_launch.xml">
+            <arg name="param_file" value="$(find-pkg-share stack_master)/config/opponent_tracker_params.yaml" />
+        </include>
+    </group>
+
+    <!-- 4) FSDP 플래너
+         - launch_state_machine=false 필수: fsdp.launch.py 는 기본값 true 로
+           state_machine 패키지의 ROS1 노드(state_machine_node.py / dynamic_statemachine_server.py)를
+           띄우려 한다. ROS2 state_machine 패키지에는 해당 실행파일이 없어 실패하고,
+           설령 있더라도 위 1) 의 state machine 과 중복되어 /local_waypoints 를 서로 덮어쓴다.
+         - graph_planner 는 절대 같이 띄우지 않는다.
+           graph_planner / corridor_generator / FSDP sqp 노드가 모두 /planner/avoidance/otwpnts 를
+           발행하므로, 동시에 띄우면 state machine 이 두 플래너의 궤적을 번갈아 받아 꼬인다.
+         - set_remap: FSDP 는 ROS1 관례대로 /state_machine (String) 을 구독하는데
+           ROS2 state machine 은 /state 로 발행한다.
+         - set_env: torch 2.11(cu13) 휠이 libcudss.so.0 를 자동 preload 하지 않아
+           GP 노드에서 import torch 가 실패한다. nvidia 런타임 라이브러리 경로를 넣어준다.
+           (경로가 없으면 그냥 무시되므로 다른 환경에서도 안전하다) -->
+    <group>
+        <set_remap from="/state_machine" to="/state"/>
+        <set_env name="LD_LIBRARY_PATH"
+                 value="$(env HOME)/.local/lib/python3.10/site-packages/nvidia/cu13/lib:$(env LD_LIBRARY_PATH '')"/>
+        <include file="$(find-pkg-share fsdp)/launch/fsdp.launch.py">
+            <arg name="launch_state_machine" value="false"/>
+            <arg name="launch_gp" value="$(var launch_gp)"/>
+            <arg name="launch_waypoint_updater" value="$(var launch_waypoint_updater)"/>
+            <arg name="width_car" value="$(var width_car)"/>
+            <arg name="evasion_dist" value="$(var evasion_dist)"/>
+            <arg name="min_evasion_dist" value="$(var min_evasion_dist)"/>
+            <arg name="spline_bound_mindist" value="$(var spline_bound_mindist)"/>
+            <arg name="avoid_static_obs" value="$(var avoid_static_obs)"/>
+        </include>
+    </group>
+
+    <!-- 5) controller (l1_controller + mpcc + mux_controller -> /drive 발행)
+         time_trials_launch.xml 과 동일. state machine 이 내는 /local_waypoints 를 따라간다. -->
+    <include file="$(find-pkg-share controller_manager)/launch/mux_controller_f110_launch.xml">
+        <arg name="mode" value="$(var ctrl_algo)"/>
+        <arg name="LU_table" value="$(var LU_table)"/>
+        <arg name="racecar_version" value="$(var racecar_version)"/>
+    </include>
+
+</launch>

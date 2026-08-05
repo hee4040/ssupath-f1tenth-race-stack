@@ -1,0 +1,13 @@
+mux_controller:
+  ros__parameters:
+    # 메인 루프 주기 [Hz]
+    loop_rate_hz: 40.0
+
+    # JOY <-> AUTO 전환 토글 버튼 (0-based index)
+    joy_toggle_button_idx: 5
+
+    # AUTO -> JOY 전환 시 정지 펄스 시간 [ms]
+    joy_stop_dwell_ms: 300
+
+    # MPCC -> PP 전환 조건 (not solve 연속 5번)
+    mpcc_hist_len: 5

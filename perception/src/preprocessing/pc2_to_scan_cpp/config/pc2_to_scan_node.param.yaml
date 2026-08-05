@@ -1,0 +1,5 @@
+/**:
+  ros__parameters:
+    range_min : 0.1
+    range_max : 7.0
+    angle_increment_deg : 0.25

@@ -1,0 +1,28 @@
+<launch>
+    <arg name="racecar_version" default="NUC2" /> <!--  SIM / NUC1 / NUC2 / NUC3 ... -->
+    <arg name="LU_table" default="NUC2_hangar_pacejka" />
+    <arg name="ctrl_algo" default="PP" /> <!-- MAP / PP / MPCC / RL -->
+    <arg name="measure" default="False" />
+    <!-- RL(강화학습 정책) 전용: 행동 -> 속도 매핑 상한 [m/s]. 다른 ctrl_algo 에서는 무시된다. -->
+    <arg name="v_max" default="5.0" />
+    <arg name="rl_scan_source" default="cloud" /> <!-- cloud(실차 Livox) / laserscan(시뮬) -->
+
+
+    <!-- launch state machine -->
+    <include file="$(find-pkg-share state_machine)/launch/state_machine_launch.xml">
+        <arg name="param_file" value="$(find-pkg-share stack_master)/config/state_machine_params.yaml"/>
+        <arg name="mode" value="timetrials"/>
+        <arg name="overtake_mode" value="dummy"/>
+    </include>
+
+    <!-- launch controller (l1_controller + mpcc + mux_controller -> /drive 발행)
+         ctrl_algo가 선언만 되고 컨트롤러가 어디서도 launch되지 않아 /drive가 비어 있었음 -->
+    <include file="$(find-pkg-share controller_manager)/launch/mux_controller_f110_launch.xml">
+        <arg name="mode" value="$(var ctrl_algo)"/>
+        <arg name="LU_table" value="$(var LU_table)"/>
+        <arg name="racecar_version" value="$(var racecar_version)"/>
+        <arg name="v_max" value="$(var v_max)"/>
+        <arg name="rl_scan_source" value="$(var rl_scan_source)"/>
+    </include>
+
+</launch>

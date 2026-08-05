@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- controller manager 인자 -->
+  <arg name="LU_table" default="NUC2_hangar_pacejka"/>
+  <arg name="mode" default="PP"
+       description="Mode of operation: MAP / PP / (FTG). methods in brackets have not been implemented"/>
+  <arg name="mapping" default="false"/>
+
+  <!-- 레이싱카 버전 (L1 YAML 경로에 사용) -->
+  <arg name="racecar_version" default="NUC2"/>
+
+  <!-- l1_controller 가 사용할 L1 파라미터 YAML 경로 -->
+  <arg name="l1_controller_param_path" default="$(find-pkg-share controller_manager)/config/l1_controller.yaml"/>
+
+  <!-- mux_controller용 파라미터 파일 -->
+  <arg name="mux_controller_param_file"
+       default="$(find-pkg-share controller_manager)/config/mux_controller.yaml"/>
+
+  <!-- l1_controller -->
+  <node pkg="controller_manager"
+        exec="l1_controller"
+        name="l1_controller"
+        output="screen">
+    <param name="mode" value="$(var mode)"/>
+    <param name="LU_table" value="$(var LU_table)"/>
+    <param name="mapping" value="$(var mapping)"/>
+    <param name="l1_controller_param_path" value="$(var l1_controller_param_path)"/>
+  </node>
+
+  <!-- mux_controller -->
+  <node pkg="controller_manager"
+        exec="mux_controller"
+        name="mux_controller"
+        output="screen">
+    <param from="$(var mux_controller_param_file)"/>
+  </node>
+</launch>

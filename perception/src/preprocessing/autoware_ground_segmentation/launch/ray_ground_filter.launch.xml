@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="ground_segmentation_param_file" default="$(find-pkg-share autoware_ground_segmentation)/config/ray_ground_filter.param.yaml"/>
+  <!-- <arg name="input/pointcloud" default="/livox/lidar"/> -->
+  <arg name="input/pointcloud" default="/passthrough/lidar"/>
+  <arg name="output/pointcloud" default="/ground_segmentation/lidar"/>
+  <node pkg="autoware_ground_segmentation" exec="ray_ground_filter_node" name="ground_segmentation" output="screen">
+    <remap from="input" to="$(var input/pointcloud)"/>
+    <remap from="output" to="$(var output/pointcloud)"/>
+    <param from="$(var ground_segmentation_param_file)"/>
+  </node>
+</launch>

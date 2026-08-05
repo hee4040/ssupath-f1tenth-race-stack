@@ -1,0 +1,67 @@
+rl_controller:
+  ros__parameters:
+    # ---------------- 정책 ---------------- #
+    # 실차 주행은 cvar.pt 만 사용한다 (pow.pt 는 상대차 스파링용 가중치).
+    checkpoint: "/home/misys/shared_dir/dacerpp_isaaclab/dacerpp_runs/20260726/cvar.pt"
+    # 젯슨의 pip torch(2.11)는 이 GPU(sm_87) 커널이 없어 cuda 실행이 실패한다.
+    # CPU 추론이 1스텝 ~4ms 라 30Hz 에 충분하므로 cpu 고정. (auto = 실제 커널 실행
+    # 테스트 후 실패하면 cpu 로 폴백)
+    device: "cpu"
+    torch_threads: 1
+    policy_seed: 0
+    # 학습 기본값 1 (디퓨전 샘플 1개를 그대로 사용). >1 로 두면 QVN(CVaR) 으로
+    # 후보 중 최선을 고른다 — 안정성이 조금 오르는 대신 추론 시간이 배로 는다.
+    num_action_candidates: 1
+    explore_noise_std: 0.0
+
+    # ---------------- 명령 ---------------- #
+    control_rate: 30.0          # 학습 제어 주기(decimation 4 @ 120Hz)와 동일하게 유지
+    v_max: 5.0                  # launch 인자 v_max 로 덮어씀
+    v_min: 1.0                  # 학습 RacingCfg.v_min — 정책이 완전 정지를 학습하지 않았다
+    obs_v_max: 10.0             # 학습 관측 정규화 상수. 절대 바꾸지 말 것
+    max_steering_angle: 0.42    # 학습 RacingCfg.max_steering_angle (기계한계 0.44)
+    # scale: 행동 -1..+1 을 v_min..v_max 로 선형 매핑 (학습 속도 커리큘럼과 동형)
+    # clip : 학습 그대로 v_min..obs_v_max 로 매핑한 뒤 v_max 로 자름
+    speed_mode: "scale"
+
+    # ---------------- 스캔 (학습 관측과 동일 포맷) ---------------- #
+    n_beams: 32
+    scan_fov: 2.356             # 전방 ±135도
+    scan_max_range: 10.0
+    # base_link 기준 높이 밴드. lobby_0728 bag 실측: 지면 z≈-0.05m, 덕트 벽 z 0~0.3m,
+    # 자차 상부 구조물 z>0.3m. 벽 높이가 다른 코스에서는 여기를 조정할 것
+    # (scripts/check_rl_setup.py --bag 로 밴드별 스캔 통계를 볼 수 있다).
+    scan_z_min: 0.02
+    scan_z_max: 0.30
+    scan_min_range: 0.05
+    # 자차 반사 제외 박스 [x_min, x_max, |y|] (base_link). 실측상 원점 부근
+    # (수평거리 0.05~0.15m)에 전장품 반사가 상시 잡힌다.
+    self_box: [-0.40, 0.55, 0.20]
+    # 점별 타임스탬프로 스윕 왜곡 + 지연을 보상 (100ms 스윕, 5m/s 면 0.5m 왜곡)
+    scan_deskew: true
+    lidar_frame: "livox_frame"
+    lidar_translation: [0.27, 0.0, 0.07]   # localization.launch.py 의 static TF 와 동일
+    lidar_yaw: 1.5707963
+
+    # ---------------- 트랙 관측 ---------------- #
+    # 중심선 인덱스 오프셋 (ds=0.15m -> 0.75/2.25/4.5/9/13.5m). 학습값 고정
+    curv_lookahead: [5, 15, 30, 60, 90]
+    hw_ref: 2.5                 # 학습 0.5 * TrackParams.width_max(5.0)
+    yawrate_norm: 4.0
+    vy_norm: 3.0
+    act_hist_len: 2
+
+    # ---------------- 토픽 ---------------- #
+    odom_topic: "/car_state/odom"
+    centerline_topic: "/centerline_waypoints"
+    lidar_topic: "/livox/lidar"
+    laserscan_topic: "/scan"
+    scan_source: "cloud"        # cloud(실차 Livox) | laserscan(시뮬)
+    imu_topic: "/sensors/imu/raw"
+    yawrate_source: "auto"      # auto | odom | imu
+    drive_topic: "/l1controller/control"
+
+    # ---------------- 안전 ---------------- #
+    odom_timeout: 0.2           # 측위가 이보다 오래 끊기면 정지 명령
+    scan_timeout: 0.5           # 라이다가 이보다 오래 끊기면 정지 명령
+    publish_debug: true         # /rl_controller/scan (LaserScan), /rl_controller/obs
