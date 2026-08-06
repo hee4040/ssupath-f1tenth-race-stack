@@ -17,6 +17,14 @@ setup(
             glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'config'),
             glob(os.path.join('config', '*.yaml'))),
+        # 가중치를 install 공간에도 넣는다. rl_controller.yaml 의 checkpoint 가
+        # 상대경로면 share/rl_controller/models/ 기준으로 해석되므로, 이게 빠지면
+        # 학습 워크스페이스 경로에 다시 의존하게 된다.
+        (os.path.join('share', package_name, 'models'),
+            glob(os.path.join('models', '*.pt')) + glob(os.path.join('models', '*.json'))
+            + glob(os.path.join('models', '*.md'))),
+        (os.path.join('share', package_name, 'models', '20260805'),
+            glob(os.path.join('models', '20260805', '*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

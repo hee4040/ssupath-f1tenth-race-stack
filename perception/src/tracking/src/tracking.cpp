@@ -816,7 +816,7 @@ private:
     for (const auto &t : tracked_){
 
       // if (!t.isInFront) continue;
-      if (!t.isInFront || t.nb_meas <=6) continue;
+      if (!t.isInFront || t.nb_meas <= 2) continue;
 
       f110_msgs::msg::Obstacle msg;
       msg.id = t.id; msg.size = t.size;

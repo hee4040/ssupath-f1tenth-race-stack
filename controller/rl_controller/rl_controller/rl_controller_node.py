@@ -6,16 +6,26 @@ Isaac Lab 에서 학습한 디퓨전 정책을 그대로 싣고, 학습 관측(5
 그 값을 /drive 로 내보내므로 조이스틱 오버라이드와 /e_stop 이 그대로 살아 있다.
 
 관측 구성 (dacerpp_lab/racing_env.py `_observe_car` 와 순서/정규화 동일):
-    [0:32]  스캔 32빔 / 10m,  전방 ±135도
+    [0:32]  스캔 32빔 / 10m,  전방 ±135도   <- 벽 + 장애물 + 상대차가 모두 섞여 들어온다
     [32]    속력 / v_max(10)                <- 학습 정규화 상수, 주행 v_max 와 무관
     [33:35] sin/cos(헤딩오차)
     [35]    횡오차 / 지역 반폭   (±1 = 벽)
-    [36:41] 전방 곡률 5개  (+5/15/30/60/90 idx = 0.75/2.25/4.5/9/13.5m)
+    [36:41] 전방 곡률 5개  (+5/15/30/60/90 idx = 0.75/2.25/4.5/9/13.5m), ±2 클립
     [41:47] 현재+전방 반폭 6개 / 2.5m
     [47:51] 직전 2스텝의 '명령' 행동 (지연 하 Markov 복원용)
-    [51:56] 상대차량 5개  <- 타임트라이얼이라 항상 0 (= 미검출)
+    [51:56] 상대차량 5개 = [rel_x/10, rel_y/10, (v_self-v_opp)/10, gap_s/10, visible]
     [56]    요레이트 / 4.0
     [57]    횡속도 / 3.0
+
+장애물 vs 상대차 (학습 env_cfg.obstacles_enabled 주석 참조):
+    학습은 두 가지를 '다른 채널'로 준다.
+      - 장애물(맵에 없는 ≤50cm 물체): 별도 상태 채널이 없다. 32빔 스캔에 footprint
+        를 오버레이할 뿐이다 -> 실차에서도 /livox/lidar 원본 클라우드에 물리적으로
+        잡히므로 이 노드의 의사 스캔이 그대로 재현한다. **장애물 인지 노드 불필요.**
+      - 상대차: 스캔에도 잡히고, 추가로 위 5개 특징으로 명시적으로 들어온다.
+        -> 실차에서는 perception 의 tracking 노드가 EKF 로 추적한 '동적' 물체
+           (/perception/obstacles 중 is_static=False)를 이 5개로 변환해 넣는다.
+    즉 인지 노드를 고칠 필요는 없고, 그 출력에서 동적 객체만 골라 쓰면 된다.
 
 행동 -> 명령: steer = a0 * max_steering_angle,
              speed = v_min + (a1+1)/2 * (v_max - v_min)   (학습의 속도 커리큘럼과 동일 형태)
@@ -32,15 +42,15 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
-from f110_msgs.msg import L1controllerControl, WpntArray
+from f110_msgs.msg import L1controllerControl, ObstacleArray, WpntArray
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan, PointCloud2
 from std_msgs.msg import Float32MultiArray
 
+from .checkpoints import DEFAULT_CKPT, resolve_checkpoint
+from .global_path import GlobalPath
 from .scan_builder import PseudoScanBuilder
 from .track_reference import TrackReference
-
-DEFAULT_CKPT = os.path.expanduser("~/shared_dir/dacerpp_isaaclab/dacerpp_runs/20260726/cvar.pt")
 
 
 def wrap_to_pi(a: float) -> float:
@@ -86,10 +96,23 @@ class RLControllerNode(Node):
         p("lidar_yaw", 1.5707963)
 
         p("curv_lookahead", [5, 15, 30, 60, 90])
+        # 곡률 관측 클립. 학습 20260805 부터 ±1 -> ±2 (racing_env._observe_car 주석:
+        # 대회 코스는 |kappa| 가 1.93 까지 가는데 ±1 클립이 '급코너 vs 아주 급한 코너'를
+        # 뭉갰다). 구 체크포인트(models/cvar.pt)를 쓸 때만 1.0 으로 되돌릴 것.
+        p("curv_clip", 2.0)
         p("hw_ref", 2.5)                    # 학습 0.5*TrackParams.width_max
         p("yawrate_norm", 4.0)
         p("vy_norm", 3.0)
         p("act_hist_len", 2)
+
+        # ---------------- 상대차량 관측 ---------------- #
+        p("opponent_enabled", True)
+        p("opponent_topic", "/perception/obstacles")
+        p("global_wpnt_topic", "/global_waypoints")
+        p("opp_timeout", 0.4)               # 이보다 오래 갱신이 없으면 미검출로 되돌림
+        p("opp_min_speed", 0.3)             # 이보다 느리면 상대차로 인정 안 함(유령 방지)
+        p("opp_require_dynamic", True)      # is_static=False 인 것만 상대차로 본다
+        p("opp_gap_norm", 10.0)             # 학습 gap_s 정규화 상수(고정)
 
         p("odom_topic", "/car_state/odom")
         p("centerline_topic", "/centerline_waypoints")
@@ -115,12 +138,18 @@ class RLControllerNode(Node):
         self.yawrate_norm = float(g("yawrate_norm"))
         self.vy_norm = float(g("vy_norm"))
         self.curv_off = [int(v) for v in g("curv_lookahead")]
+        self.curv_clip = float(g("curv_clip"))
         self.width_off = [0] + self.curv_off
         self.act_hist_len = int(g("act_hist_len"))
         self.odom_timeout = float(g("odom_timeout"))
         self.scan_timeout = float(g("scan_timeout"))
         self.publish_debug = bool(g("publish_debug"))
         self.yawrate_source = str(g("yawrate_source")).lower()
+        self.opp_enabled = bool(g("opponent_enabled"))
+        self.opp_timeout = float(g("opp_timeout"))
+        self.opp_min_speed = float(g("opp_min_speed"))
+        self.opp_require_dynamic = bool(g("opp_require_dynamic"))
+        self.opp_gap_norm = float(g("opp_gap_norm"))
 
         if self.v_max <= self.v_min:
             raise RuntimeError(f"v_max({self.v_max}) 는 v_min({self.v_min}) 보다 커야 합니다")
@@ -130,7 +159,7 @@ class RLControllerNode(Node):
         torch = import_torch()
         torch.set_num_threads(max(1, int(g("torch_threads"))))
         device = resolve_device(torch, str(g("device")))
-        ckpt = os.path.expanduser(str(g("checkpoint")))
+        ckpt = resolve_checkpoint(str(g("checkpoint")))
         if not os.path.isfile(ckpt):
             raise RuntimeError(f"체크포인트를 찾을 수 없습니다: {ckpt}")
 
@@ -167,11 +196,16 @@ class RLControllerNode(Node):
 
         # ---------------- 상태 ---------------- #
         self.track: Optional[TrackReference] = None
+        self.glob: Optional[GlobalPath] = None      # 상대차 Frenet -> 맵 좌표 변환용
         self.pose: Optional[Tuple[float, float, float]] = None    # x, y, yaw
         self.vx = self.vy = self.wz = 0.0
         self.imu_wz: Optional[float] = None
         self.t_odom = -1.0
         self.t_scan = -1.0
+        self.opp_xy: Optional[Tuple[float, float]] = None         # 상대차 맵 좌표
+        self.opp_speed = 0.0
+        self.t_opp = -1.0
+        self._opp_visible = False
         self.hist = np.zeros(2 * self.act_hist_len, dtype=np.float32)
         self.last_obs: Optional[np.ndarray] = None
         self._stopped = True
@@ -196,17 +230,26 @@ class RLControllerNode(Node):
             self.create_subscription(LaserScan, str(g("laserscan_topic")), self.laserscan_cb, 1)
         else:
             self.create_subscription(PointCloud2, str(g("lidar_topic")), self.cloud_cb, 1)
+        if self.opp_enabled:
+            # tracking 노드의 s/d 는 '레이스라인'(/global_waypoints) 기준이라
+            # 맵 좌표로 되돌리려면 그 웨이포인트가 필요하다 (중심선과 다른 곡선).
+            self.create_subscription(WpntArray, str(g("global_wpnt_topic")),
+                                     self.global_wpnt_cb, 10)
+            self.create_subscription(ObstacleArray, str(g("opponent_topic")),
+                                     self.obstacles_cb, 5)
 
         self.drive_pub = self.create_publisher(L1controllerControl, str(g("drive_topic")), 1)
         if self.publish_debug:
             self.scan_pub = self.create_publisher(LaserScan, "/rl_controller/scan", 1)
             self.obs_pub = self.create_publisher(Float32MultiArray, "/rl_controller/obs", 1)
+            self.opp_pub = self.create_publisher(Float32MultiArray, "/rl_controller/opponent", 1)
 
         self.timer = self.create_timer(1.0 / self.rate, self.control_loop)
         self.get_logger().info(
             f"rl_controller 시작: {self.rate:.0f}Hz, v={self.v_min:.1f}~{self.v_max:.1f}m/s "
             f"({self.speed_mode}), |steer|<={self.max_steer:.2f}rad, "
-            f"스캔소스={self.scan_source}")
+            f"스캔소스={self.scan_source}, 곡률클립=±{self.curv_clip:.0f}, "
+            f"상대차관측={'on' if self.opp_enabled else 'off'}")
 
     # ------------------------------------------------------------------ #
     # 콜백
@@ -223,6 +266,49 @@ class RLControllerNode(Node):
             self.get_logger().error(f"중심선 기준선 생성 실패: {exc}")
             return
         self.get_logger().info(f"중심선 기준선 생성: {self.track.summary()}")
+
+    def global_wpnt_cb(self, msg: WpntArray):
+        if self.glob is not None or len(msg.wpnts) < 4:
+            return
+        try:
+            self.glob = GlobalPath.from_waypoints([w.s_m for w in msg.wpnts],
+                                                  [w.x_m for w in msg.wpnts],
+                                                  [w.y_m for w in msg.wpnts])
+        except Exception as exc:                                   # noqa: BLE001
+            self.get_logger().error(f"레이스라인(Frenet 변환용) 생성 실패: {exc}")
+            return
+        self.get_logger().info(f"레이스라인 수신: {self.glob.summary()} (상대차 s/d -> 맵 변환용)")
+
+    def obstacles_cb(self, msg: ObstacleArray):
+        """/perception/obstacles -> 상대차량 1대의 맵 좌표 + 속력.
+
+        tracking 노드는 한 배열 안에 정적 장애물과 상대차를 섞어 보내지만
+        구분 자체는 되어 있다:
+          - is_static=True  : 정적/미정 장애물 (vs=vd=0) -> RL 은 스캔으로만 본다.
+          - is_static=False : opponent EKF 가 추적 중인 동적 물체 = 상대차.
+        여기서는 후자만 골라 쓴다. 정적 장애물을 상대차 채널에 넣으면 학습 분포와
+        어긋난다 (학습에서 장애물은 스캔에만 존재한다).
+        """
+        if self.glob is None:
+            return
+        best = None
+        for o in msg.obstacles:
+            if self.opp_require_dynamic and o.is_static:
+                continue
+            speed = math.hypot(float(o.vs), float(o.vd))
+            if speed < self.opp_min_speed:
+                continue
+            xy = self.glob.to_cartesian(float(o.s_center), float(o.d_center))
+            if self.pose is not None:
+                d = math.hypot(xy[0] - self.pose[0], xy[1] - self.pose[1])
+            else:
+                d = 0.0
+            if best is None or d < best[0]:
+                best = (d, xy, speed)
+        if best is None:
+            return
+        _, self.opp_xy, self.opp_speed = best
+        self.t_opp = self._now()
 
     def odom_cb(self, msg: Odometry):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
@@ -319,15 +405,16 @@ class RLControllerNode(Node):
         width = self.track.lookahead_width(idx, self.width_off)
         speed = math.hypot(self.vx, self.vy)
         wz = self.imu_wz if (self.yawrate_source == "imu" and self.imu_wz is not None) else self.wz
+        opp = self.opponent_features(x, y, yaw, speed, proj["s"])
 
         obs = np.concatenate([
             np.clip(scan / self.scan.max_range, 0.0, 1.0),
             [speed / self.obs_v_max, math.sin(herr), math.cos(herr)],
             [np.clip(proj["lateral"] / max(hw_local, 1e-6), -2.0, 2.0)],
-            np.clip(curv, -1.0, 1.0),
+            np.clip(curv, -self.curv_clip, self.curv_clip),
             np.clip(width / self.hw_ref, 0.0, 1.0),
             np.clip(self.hist, -1.0, 1.0),
-            np.zeros(5),                      # 상대차량 미검출 (타임트라이얼)
+            opp,                              # 상대차량 5개 (미검출이면 전부 0)
             [np.clip(wz / self.yawrate_norm, -1.0, 1.0),
              np.clip(self.vy / self.vy_norm, -1.0, 1.0)],
         ]).astype(np.float32)
@@ -335,6 +422,53 @@ class RLControllerNode(Node):
         self._dbg = dict(lat=proj["lateral"], hw=hw_local, herr=herr, speed=speed,
                          wz=wz, s=proj["s"], idx=idx)
         return obs
+
+    # ------------------------------------------------------------------ #
+    def opponent_features(self, x: float, y: float, yaw: float, speed: float,
+                          s_self: float) -> np.ndarray:
+        """학습 racing_env._observe_car 의 상대차 5개 특징을 그대로 만든다.
+
+            [rel_x/R, rel_y/R, (v_self - v_opp)/v_max, gap_s/10, visible]  (R = 10m)
+
+        학습의 visible 은 '실차 LiDAR 로 실제 보이는가'를 모사한 게이트였다
+        (거리 < 10m, |방위각| <= 135도, 벽에 가리지 않음). 실차에서는 검출 자체가
+        LiDAR 로 이뤄지므로 가림은 이미 반영되어 있고, 거리/시야각만 다시 건다.
+        미검출이면 학습과 동일하게 5개 전부 0.
+        """
+        opp = np.zeros(5, dtype=np.float64)
+        self._opp_visible = False
+        if not self.opp_enabled or self.opp_xy is None or self.track is None:
+            return opp
+        if self._now() - self.t_opp > self.opp_timeout:
+            return opp
+
+        dx, dy = self.opp_xy[0] - x, self.opp_xy[1] - y
+        c, s = math.cos(-yaw), math.sin(-yaw)
+        rel_x = dx * c - dy * s
+        rel_y = dx * s + dy * c
+        rng = math.hypot(rel_x, rel_y)
+        brg = math.atan2(rel_y, rel_x)
+        if rng >= self.scan.max_range or abs(brg) > self.scan.fov:
+            return opp
+
+        gap = self._wrap_ds(self.track.project(*self.opp_xy)["s"] - s_self)
+        opp[:] = [np.clip(rel_x / self.scan.max_range, -1.0, 1.0),
+                  np.clip(rel_y / self.scan.max_range, -1.0, 1.0),
+                  np.clip((speed - self.opp_speed) / self.obs_v_max, -1.0, 1.0),
+                  np.clip(gap / self.opp_gap_norm, -1.0, 1.0),
+                  1.0]
+        self._opp_visible = True
+        self._opp_dbg = (rel_x, rel_y, rng, gap, self.opp_speed)
+        return opp
+
+    def _wrap_ds(self, ds: float) -> float:
+        """학습 racing_env._wrap_ds 와 동일: 랩 길이 기준 [-L/2, L/2) 로 접기."""
+        tot = self.track.total_s
+        if ds < -0.5 * tot:
+            ds += tot
+        elif ds > 0.5 * tot:
+            ds -= tot
+        return ds
 
     # ------------------------------------------------------------------ #
     def control_loop(self):
@@ -379,10 +513,16 @@ class RLControllerNode(Node):
         if self.publish_debug:
             self.publish_debug_msgs(obs)
         d = self._dbg
+        if self._opp_visible:
+            rx, ry, rng, gap, vopp = self._opp_dbg
+            opp_txt = f" opp=({rx:+.1f},{ry:+.1f})m d={rng:.1f} gap={gap:+.1f} v={vopp:.1f}"
+        else:
+            opp_txt = ""
         self.get_logger().info(
             f"v={d['speed']:.2f}->{speed:.2f} steer={steer:+.3f} lat={d['lat']:+.2f}/"
             f"{d['hw']:.2f} herr={d['herr']:+.2f} wz={d['wz']:+.2f} "
-            f"beams={self._last_beams_hit}/{self.scan.n_beams} inf={self._infer_ms:.1f}ms",
+            f"beams={self._last_beams_hit}/{self.scan.n_beams} inf={self._infer_ms:.1f}ms"
+            + opp_txt,
             throttle_duration_sec=1.0)
 
     def _not_ready_reason(self) -> Optional[str]:
@@ -421,6 +561,11 @@ class RLControllerNode(Node):
         m = Float32MultiArray()
         m.data = [float(v) for v in obs]
         self.obs_pub.publish(m)
+
+        # 상대차 5개 특징만 따로 (rqt_plot 으로 검출 유무를 바로 보기 위함)
+        o = Float32MultiArray()
+        o.data = [float(v) for v in obs[-7:-2]]
+        self.opp_pub.publish(o)
 
 
 def main(args=None):

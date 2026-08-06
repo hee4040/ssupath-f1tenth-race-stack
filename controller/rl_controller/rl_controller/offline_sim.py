@@ -35,6 +35,8 @@ N_BEAMS, FOV, RMAX = 32, 2.356, 10.0
 HW_REF, OBS_VMAX, V_MIN = 2.5, 10.0, 1.0
 CURV_OFF = (5, 15, 30, 60, 90)
 WIDTH_OFF = (0,) + CURV_OFF
+# 곡률 관측 클립. 20260805 세대 학습부터 ±2 (구세대 체크포인트를 검증할 때만 1.0).
+CURV_CLIP = 2.0
 OFFTRACK_MARGIN, SPIN_HERR = -0.20, 1.745
 ANGLES = np.linspace(-FOV, FOV, N_BEAMS)
 
@@ -125,8 +127,9 @@ def make_obs(tr, walls, car: CarSim, hist: np.ndarray, scan_noise: float = 0.0,
         np.clip(scan / RMAX, 0, 1),
         [car.speed / OBS_VMAX, math.sin(herr), math.cos(herr)],
         [np.clip(proj["lateral"] / hw, -2, 2)],
-        np.clip(tr.lookahead_curvature(idx, CURV_OFF), -1, 1),
+        np.clip(tr.lookahead_curvature(idx, CURV_OFF), -CURV_CLIP, CURV_CLIP),
         np.clip(tr.lookahead_width(idx, WIDTH_OFF) / HW_REF, 0, 1),
+        # 상대차 5개는 0 = 미검출. 이 검증기는 단독 주행만 본다.
         np.clip(hist, -1, 1), np.zeros(5),
         [np.clip(car.r / 4.0, -1, 1), np.clip(car.vy / 3.0, -1, 1)],
     ]).astype(np.float32)

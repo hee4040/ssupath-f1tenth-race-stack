@@ -43,6 +43,7 @@ public:
     min_obs_size_           = declare_parameter<double>("min_obs_size", 0.05);
     max_obs_size_           = declare_parameter<double>("max_obs_size", 0.5);
     max_viewing_distance_   = declare_parameter<double>("max_viewing_distance", 5.0); //최대 장애물 탐지거리, 5m
+    min_intrusion_          = declare_parameter<double>("min_intrusion", 0.0); // 장애물이 트랙 안쪽을 물어야 하는 최소 깊이 [m]
     boundaries_inflation_   = this->get_parameter("boundaries_inflation").as_double();
 
 
@@ -252,7 +253,7 @@ private:
         const double d = d_out[i];
         const double size = valids[i].size;
 
-        if (!laserPointOnTrack(s, d, car_s_)) continue;
+        if (!laserPointOnTrack(s, d, car_s_, size)) continue;
       //   if ( size > max_obs_size_){ // size filtering
       //       RCLCPP_INFO(get_logger(),
       //         "BIGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG:");
@@ -271,7 +272,7 @@ private:
 
         visualization_msgs::msg::Marker m;
         m.header.frame_id = map_frame_;
-        m.header.stamp = now();
+        m.header.stamp = now(); //msg->header.stamp; // 라이다 데이터의 타임스탬프 기준 변환을 시도
         m.ns = "obstacles";
         m.id = static_cast<int>(published);
         m.type = visualization_msgs::msg::Marker::CUBE;
@@ -312,10 +313,18 @@ private:
     return m;
   }
 
-  bool laserPointOnTrack(double s, double d, double car_s) const {
+  // 장애물의 '가로 끝'까지 보고 트랙 안팎을 판정한다.
+  // 예전에는 중심점 (s,d) 한 점만 검사해서, 벽에 붙은 장애물은 중심이 경계 밖이라는
+  // 이유로 통째로 버려졌다(= raw_obstacles 에 아예 안 실림 -> 하류 전부 못 봄).
+  // 이제 [d - size/2, d + size/2] 구간이 트랙 폭과 겹치는지를 본다.
+  bool laserPointOnTrack(double s, double d, double car_s, double size = 0.0) const {
+    const double half = std::max(0.0, size * 0.5);
+    const double d_lo = d - half;   // 장애물 오른쪽 끝
+    const double d_hi = d + half;   // 장애물 왼쪽 끝
+
     if (wrap_s(s - car_s) > max_viewing_distance_) return false;
-    if (std::fabs(d) >= biggest_d_) return false;
-    if (std::fabs(d) <= smallest_d_) return true;
+    if (std::fabs(d) - half >= biggest_d_) return false;  // 가까운 쪽 끝 기준 조기 기각
+    if (std::fabs(d) <= smallest_d_) return true;         // 중심이 안이면 무조건 겹침
 
     // s 구간 인덱스 (bisect_left)
     size_t idx = 0;
@@ -324,7 +333,11 @@ private:
     else idx = static_cast<size_t>(std::distance(s_array_.begin(), it) - 1);
     if (idx >= d_right_array_.size()) idx = d_right_array_.size() - 1;
 
-    if (d <= -d_right_array_[idx] || d >= d_left_array_[idx]) return false;
+    // 트랙 내부는 d in (-d_right, +d_left). 장애물이 트랙 안쪽을 min_intrusion_ 이상
+    // 물고 있어야 통과시킨다. 0.0 이면 "스치기만 해도 통과"(기본), 키우면 경계 바깥에
+    // 아슬아슬하게 걸치는 벽 점군을 다시 걸러낸다.
+    if (d_hi <= -d_right_array_[idx] + min_intrusion_) return false;
+    if (d_lo >=  d_left_array_[idx]  - min_intrusion_) return false;
     return true;
   }
 
@@ -343,6 +356,7 @@ private:
   // Params
   std::string frenet_waypoints_topic_, cluster_topic_, obstacle_pub_topic_, obstacle_marker_topic_;
   double min_obs_size_{0.05}, max_obs_size_{0.5}, max_viewing_distance_{5.0}, boundaries_inflation_{0.0};
+  double min_intrusion_{0.0};
   std::string input_frame_{"livox_frame"}, map_frame_{"map"};
 
   // Pubs/Subs

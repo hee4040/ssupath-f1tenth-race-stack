@@ -1,0 +1,70 @@
+<launch>
+    <!-- ===================================================================
+         RL(DACER++) 단독 주행 + 장애물/상대차 인지.
+
+         time_trials_launch.xml 은 인지(perception) 체인을 띄우지 않는다
+         (bringup_3D_launch.py 에도 없다). 그래서 그 명령으로 돌리면
+         /perception/obstacles 가 아예 발행되지 않고, RL 관측의 상대차 5개
+         (obs[51:56])는 항상 0 = '미검출' 이었다.
+
+         이 런치는 거기에 perception 체인을 얹은 것이다:
+           passthrough -> ray_ground_filter -> euclidean_cluster
+           -> cluster_to_obstacle -> tracking(정적/동적 분류 + 상대차 EKF)
+           + pc2_to_scan
+
+         ★ 인지 노드 자체는 수정하지 않았다. 이유:
+           - 장애물(맵에 없는 ≤50cm 물체)은 학습에서 별도 상태 채널이 없다.
+             32빔 스캔에 footprint 로 오버레이될 뿐이고, 실차에서는 Livox 원본
+             클라우드에 물리적으로 잡히므로 rl_controller 의 의사 스캔이 그대로
+             재현한다 (dacerpp_lab/env_cfg.py obstacles_enabled 주석:
+             "별도 상태 채널을 안 써서 obs_dim 불변(58) = 실차에 장애물 감지
+              모듈 불필요").
+           - 상대차는 tracking 노드가 이미 구분해서 낸다: /perception/obstacles
+             안에서 is_static=False + vs/vd 를 가진 항목이 opponent EKF 추적
+             대상이다. 정적/미정 장애물은 is_static=True 로 나온다.
+           따라서 필요한 건 인지 노드 수정이 아니라 '출력에서 동적 객체만 골라
+           학습 포맷으로 바꾸는 것'이고, 그건 rl_controller 안에서 한다
+           (rl_controller/rl_controller_node.py 의 obstacles_cb /
+            opponent_features, config 의 opponent_* 파라미터).
+
+         사용법 (base_system 은 기존과 동일):
+           ros2 launch stack_master base_system_3D_launch.xml racecar_version:=NUC2 \
+                map_dir:=lobby_0806 map_name:=lobby_0806 sim:=false rviz:=true
+           ros2 launch stack_master time_trials_rl_launch.xml racecar_version:=NUC2 v_max:=5
+         =================================================================== -->
+    <arg name="racecar_version" default="NUC2" /> <!--  SIM / NUC1 / NUC2 / NUC3 ... -->
+    <arg name="LU_table" default="NUC2_hangar_pacejka" />
+    <!-- 이 런치는 RL 전용이다. 다른 컨트롤러는 time_trials_launch.xml 을 쓸 것. -->
+    <arg name="ctrl_algo" default="RL" />
+    <arg name="v_max" default="5.0" /> <!-- 행동 -> 속도 매핑 상한 [m/s] -->
+    <arg name="rl_scan_source" default="cloud" /> <!-- cloud(실차 Livox) / laserscan(시뮬) -->
+    <!-- 인지 체인을 띄울지. false 면 time_trials_launch.xml 과 동일하게 동작한다
+         (상대차 관측은 자동으로 0 = 미검출). -->
+    <arg name="perception" default="true" />
+    <!-- 상대차 관측(obs[51:56])을 쓸지. perception:=false 면 어차피 0 이다. -->
+    <arg name="opponent" default="true" />
+
+    <!-- state machine: RL 은 로컬 웨이포인트를 따라가지 않고 정책이 직접 조향/속도를
+         내므로 timetrials 로 둔다 (state machine 출력은 RL 경로에 관여하지 않는다). -->
+    <include file="$(find-pkg-share state_machine)/launch/state_machine_launch.xml">
+        <arg name="mode" value="timetrials"/>
+    </include>
+
+    <!-- perception: 장애물 + 상대차 검출/추적 -> /perception/obstacles -->
+    <group if="$(var perception)">
+        <include file="$(find-pkg-share tracking)/launch/full_perception.launch.xml" />
+    </group>
+
+    <!-- controller: ctrl_algo=RL 이면 l1_controller 대신 rl_controller 가 뜬다.
+         발행 토픽(/l1controller/control)은 같으므로 mux 의 joy 오버라이드와
+         /e_stop 은 그대로 살아 있다. -->
+    <include file="$(find-pkg-share controller_manager)/launch/mux_controller_f110_launch.xml">
+        <arg name="mode" value="$(var ctrl_algo)"/>
+        <arg name="LU_table" value="$(var LU_table)"/>
+        <arg name="racecar_version" value="$(var racecar_version)"/>
+        <arg name="v_max" value="$(var v_max)"/>
+        <arg name="rl_scan_source" value="$(var rl_scan_source)"/>
+        <arg name="rl_opponent" value="$(var opponent)"/>
+    </include>
+
+</launch>

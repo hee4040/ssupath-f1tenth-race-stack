@@ -67,7 +67,7 @@ graph_planner:
     #   ★ state_machine 의 lateral_width_ot_m(0.17) 이 여기 묶여 있다:
     #     veh_width/2 < lateral_width_ot_m < veh_width/2 + min_safety_margin
     #     (0.14 < 0.17 < 0.19). 이 값을 바꾸면 lateral_width_ot_m 도 같이 봐야 한다.
-    min_safety_margin: 0.05
+    min_safety_margin: 0.15
     #
     # ---- 속도 비례 safety_margin ----
     # obs_debug_0804_2103 실측: 나란히 지난 1019 프레임의 표면 여유 중앙이 +0.102 m,

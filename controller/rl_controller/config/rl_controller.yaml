@@ -1,8 +1,17 @@
 rl_controller:
   ros__parameters:
     # ---------------- 정책 ---------------- #
-    # 실차 주행은 cvar.pt 만 사용한다 (pow.pt 는 상대차 스파링용 가중치).
-    checkpoint: "/home/misys/shared_dir/dacerpp_isaaclab/dacerpp_runs/20260726/cvar.pt"
+    # 학습 코드는 한 환경에 두 대를 태워 동시에 학습한다:
+    #   car_a = cvar.pt (보수적, 스파링 상대 역할 + 속도 핸디캡)
+    #   car_b = pow.pt  (공격적, **실차 배포 대상** — env_cfg.v_cap_a_range 주석)
+    # 따라서 실차 주행 가중치는 pow.pt 다.
+    #
+    # 경로는 절대경로면 그대로, 아니면 이 패키지의 models/ 기준으로 해석된다.
+    # 가중치는 레포 안에 복사돼 있으므로 학습 워크스페이스(~/shared_dir)가 없어도 된다.
+    #   models/20260805/pow.pt   <- 현재 기본. 곡률 클립 ±2 세대
+    #   models/20260805/cvar.pt  <- 같은 런의 보수적 정책(헤어핀에서 더 안전하게 갈 때)
+    #   models/cvar.pt           <- 구세대(20260726). 쓰려면 curv_clip 을 1.0 으로 되돌릴 것
+    checkpoint: "20260805/pow.pt"
     # 젯슨의 pip torch(2.11)는 이 GPU(sm_87) 커널이 없어 cuda 실행이 실패한다.
     # CPU 추론이 1스텝 ~4ms 라 30Hz 에 충분하므로 cpu 고정. (auto = 실제 커널 실행
     # 테스트 후 실패하면 cpu 로 폴백)
@@ -46,10 +55,33 @@ rl_controller:
     # ---------------- 트랙 관측 ---------------- #
     # 중심선 인덱스 오프셋 (ds=0.15m -> 0.75/2.25/4.5/9/13.5m). 학습값 고정
     curv_lookahead: [5, 15, 30, 60, 90]
+    # 곡률 관측 클립. 학습 20260805 세대부터 ±1 -> ±2 로 넓어졌다.
+    # (racing_env._observe_car: 대회 코스는 |kappa| 가 1.93(R 0.52m)까지 가는데
+    #  ±1 클립이 1.0 이상을 전부 1.0 으로 뭉개 '급코너 vs 아주 급한 코너'를
+    #  정책이 구분하지 못했다 — 헤어핀 대응 실패의 한 축)
+    # ★ models/cvar.pt(구 20260726 세대)로 되돌릴 때는 반드시 1.0 으로 바꿀 것.
+    curv_clip: 2.0
     hw_ref: 2.5                 # 학습 0.5 * TrackParams.width_max(5.0)
     yawrate_norm: 4.0
     vy_norm: 3.0
     act_hist_len: 2
+
+    # ---------------- 상대차량 관측 (obs[51:56]) ---------------- #
+    # 학습에서 장애물과 상대차는 서로 다른 채널이다:
+    #   장애물(맵에 없는 ≤50cm 물체) -> 32빔 스캔에만 나타난다. 실차에서도 Livox
+    #     원본 클라우드에 물리적으로 잡히므로 별도 인지 모듈이 필요 없다.
+    #   상대차 -> 스캔에도 잡히고, 추가로 아래 5개 특징으로 명시적으로 들어간다.
+    # 그래서 perception 의 tracking 노드 출력 중 '동적'(is_static=False)으로
+    # 분류된 것만 골라 쓴다. 정적 장애물을 여기 넣으면 학습 분포와 어긋난다.
+    # perception 체인이 안 떠 있으면 (기존 time_trials_launch) 자동으로 전부 0 =
+    # 학습의 '상대차 미검출' 상태와 같으므로 그대로 두어도 안전하다.
+    opponent_enabled: true
+    opponent_topic: "/perception/obstacles"
+    global_wpnt_topic: "/global_waypoints"   # tracking 의 s/d 기준선(레이스라인)
+    opp_timeout: 0.4            # 이보다 오래 갱신 없으면 미검출(0)로 되돌림
+    opp_min_speed: 0.3          # 이보다 느린 '동적' 물체는 유령으로 보고 무시
+    opp_require_dynamic: true   # false 로 두면 정적 장애물까지 상대차로 취급(비권장)
+    opp_gap_norm: 10.0          # 학습 gap_s 정규화 상수. 바꾸지 말 것
 
     # ---------------- 토픽 ---------------- #
     odom_topic: "/car_state/odom"

@@ -32,6 +32,7 @@
 #define VESC_DRIVER__VESC_DRIVER_HPP_
 
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <vesc_msgs/msg/vesc_state.hpp>
@@ -41,6 +42,7 @@
 #include <experimental/optional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "vesc_driver/vesc_interface.hpp"
 #include "vesc_driver/vesc_packet.hpp"
@@ -52,6 +54,7 @@ using std_msgs::msg::Float64;
 using vesc_msgs::msg::VescState;
 using vesc_msgs::msg::VescStateStamped;
 using vesc_msgs::msg::VescImuStamped;
+using sensor_msgs::msg::Joy;
 using sensor_msgs::msg::Imu;
 
 class VescDriver
@@ -103,7 +106,16 @@ private:
   rclcpp::SubscriptionBase::SharedPtr speed_sub_;
   rclcpp::SubscriptionBase::SharedPtr position_sub_;
   rclcpp::SubscriptionBase::SharedPtr servo_sub_;
+  rclcpp::Subscription<Joy>::SharedPtr joy_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+
+  bool joy_estop_enabled_{true};
+  int joy_estop_button_idx_{2};
+  int joy_estop_release_button_idx_{3};
+  double joy_estop_servo_position_{0.5};
+  bool joy_estop_latched_{false};
+  bool have_last_buttons_{false};
+  std::vector<int> last_buttons_;
 
   // driver modes (possible states)
   typedef enum
@@ -126,6 +138,10 @@ private:
   void servoCallback(const Float64::SharedPtr servo);
   void speedCallback(const Float64::SharedPtr speed);
   void timerCallback();
+  void joyCallback(const Joy::SharedPtr joy);
+  bool isRisingEdge(const std::vector<int> & buttons, int idx) const;
+  bool isJoyEStopActive() const;
+  void enforceJoyEStop();
 };
 
 }  // namespace vesc_driver

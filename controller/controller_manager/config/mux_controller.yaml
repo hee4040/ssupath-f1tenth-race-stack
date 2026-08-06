@@ -6,6 +6,13 @@ mux_controller:
     # JOY <-> AUTO 전환 토글 버튼 (0-based index)
     joy_toggle_button_idx: 5
 
+    # Sony Wireless Controller 기준:
+    #   기존 사용: L1=4(deadman), R1=5(JOY/AUTO toggle)
+    #   추가 사용: Circle=2(e-stop latch), Triangle=3(release)
+    joy_estop_enabled: true
+    joy_estop_button_idx: 2
+    joy_estop_release_button_idx: 3
+
     # AUTO -> JOY 전환 시 정지 펄스 시간 [ms]
     joy_stop_dwell_ms: 300
 

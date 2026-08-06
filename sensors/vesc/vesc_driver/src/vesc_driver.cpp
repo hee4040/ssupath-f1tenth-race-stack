@@ -30,6 +30,7 @@
 
 #include "vesc_driver/vesc_driver.hpp"
 
+#include <sensor_msgs/msg/joy.hpp>
 #include <vesc_msgs/msg/vesc_state.hpp>
 #include <vesc_msgs/msg/vesc_state_stamped.hpp>
 
@@ -47,6 +48,7 @@ namespace vesc_driver
 
 using namespace std::chrono_literals;
 using std::placeholders::_1;
+using sensor_msgs::msg::Joy;
 using std_msgs::msg::Float64;
 using vesc_msgs::msg::VescStateStamped;
 using sensor_msgs::msg::Imu;
@@ -69,6 +71,10 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
 {
   // get vesc serial port address
   std::string port = declare_parameter<std::string>("port", "");
+  joy_estop_enabled_ = declare_parameter<bool>("joy_estop_enabled", true);
+  joy_estop_button_idx_ = declare_parameter<int>("joy_estop_button_idx", 2);
+  joy_estop_release_button_idx_ = declare_parameter<int>("joy_estop_release_button_idx", 3);
+  joy_estop_servo_position_ = declare_parameter<double>("joy_estop_servo_position", 0.5);
 
   // attempt to connect to the serial port
   try {
@@ -104,9 +110,18 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
     "commands/motor/position", rclcpp::QoS{10}, std::bind(&VescDriver::positionCallback, this, _1));
   servo_sub_ = create_subscription<Float64>(
     "commands/servo/position", rclcpp::QoS{10}, std::bind(&VescDriver::servoCallback, this, _1));
+  joy_sub_ = create_subscription<Joy>(
+    "/joy", rclcpp::QoS{10}, std::bind(&VescDriver::joyCallback, this, _1));
 
   // create a 50Hz timer, used for state machine & polling VESC telemetry
   timer_ = create_wall_timer(20ms, std::bind(&VescDriver::timerCallback, this));
+
+  RCLCPP_INFO(
+    get_logger(),
+    "VESC joystick e-stop %s. stop button idx=%d, release button idx=%d",
+    joy_estop_enabled_ ? "enabled" : "disabled",
+    joy_estop_button_idx_,
+    joy_estop_release_button_idx_);
 }
 
 /* TODO or TO-THINKABOUT LIST
@@ -146,6 +161,10 @@ void VescDriver::timerCallback()
       driver_mode_ = MODE_OPERATING;
     }
   } else if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+    }
+
     // poll for vesc state (telemetry)
     vesc_.requestState();
     // poll for vesc imu
@@ -293,6 +312,10 @@ void VescDriver::vescErrorCallback(const std::string & error)
 void VescDriver::dutyCycleCallback(const Float64::SharedPtr duty_cycle)
 {
   if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+      return;
+    }
     vesc_.setDutyCycle(duty_cycle_limit_.clip(duty_cycle->data));
   }
 }
@@ -305,6 +328,10 @@ void VescDriver::dutyCycleCallback(const Float64::SharedPtr duty_cycle)
 void VescDriver::currentCallback(const Float64::SharedPtr current)
 {
   if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+      return;
+    }
     vesc_.setCurrent(current_limit_.clip(current->data));
   }
 }
@@ -317,6 +344,10 @@ void VescDriver::currentCallback(const Float64::SharedPtr current)
 void VescDriver::brakeCallback(const Float64::SharedPtr brake)
 {
   if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+      return;
+    }
     vesc_.setBrake(brake_limit_.clip(brake->data));
   }
 }
@@ -330,6 +361,10 @@ void VescDriver::brakeCallback(const Float64::SharedPtr brake)
 void VescDriver::speedCallback(const Float64::SharedPtr speed)
 {
   if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+      return;
+    }
     vesc_.setSpeed(speed_limit_.clip(speed->data));
   }
 }
@@ -341,6 +376,10 @@ void VescDriver::speedCallback(const Float64::SharedPtr speed)
 void VescDriver::positionCallback(const Float64::SharedPtr position)
 {
   if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+      return;
+    }
     // ROS uses radians but VESC seems to use degrees. Convert to degrees.
     double position_deg = position_limit_.clip(position->data) * 180.0 / M_PI;
     vesc_.setPosition(position_deg);
@@ -353,6 +392,10 @@ void VescDriver::positionCallback(const Float64::SharedPtr position)
 void VescDriver::servoCallback(const Float64::SharedPtr servo)
 {
   if (driver_mode_ == MODE_OPERATING) {
+    if (isJoyEStopActive()) {
+      enforceJoyEStop();
+      return;
+    }
     double servo_clipped(servo_limit_.clip(servo->data));
     vesc_.setServo(servo_clipped);
     // publish clipped servo value as a "sensor"
@@ -360,6 +403,71 @@ void VescDriver::servoCallback(const Float64::SharedPtr servo)
     servo_sensor_msg.data = servo_clipped;
     servo_sensor_pub_->publish(servo_sensor_msg);
   }
+}
+
+void VescDriver::joyCallback(const Joy::SharedPtr joy)
+{
+  const auto & buttons = joy->buttons;
+
+  if (!have_last_buttons_) {
+    last_buttons_ = std::vector<int>(buttons.size(), 0);
+    have_last_buttons_ = true;
+  }
+
+  const bool stop_edge = isRisingEdge(buttons, joy_estop_button_idx_);
+  const bool release_edge = isRisingEdge(buttons, joy_estop_release_button_idx_);
+
+  if (!joy_estop_latched_ && stop_edge) {
+    joy_estop_latched_ = true;
+    enforceJoyEStop();
+    RCLCPP_ERROR(
+      get_logger(),
+      "VESC JOYSTICK E-STOP latched (button idx=%d). Press release button idx=%d to resume.",
+      joy_estop_button_idx_,
+      joy_estop_release_button_idx_);
+  } else if (joy_estop_latched_ && release_edge) {
+    joy_estop_latched_ = false;
+    RCLCPP_WARN(
+      get_logger(),
+      "VESC joystick e-stop released (button idx=%d).",
+      joy_estop_release_button_idx_);
+  }
+
+  last_buttons_ = buttons;
+}
+
+bool VescDriver::isRisingEdge(const std::vector<int> & buttons, int idx) const
+{
+  if (idx < 0) {
+    return false;
+  }
+
+  const auto button_idx = static_cast<size_t>(idx);
+  const bool current = button_idx < buttons.size() && buttons[button_idx] == 1;
+  const bool previous = button_idx < last_buttons_.size() && last_buttons_[button_idx] == 1;
+  return current && !previous;
+}
+
+bool VescDriver::isJoyEStopActive() const
+{
+  return joy_estop_enabled_ && joy_estop_latched_;
+}
+
+void VescDriver::enforceJoyEStop()
+{
+  if (driver_mode_ != MODE_OPERATING) {
+    return;
+  }
+
+  vesc_.setDutyCycle(0.0);
+  vesc_.setCurrent(0.0);
+  vesc_.setSpeed(0.0);
+
+  const double servo_clipped = servo_limit_.clip(joy_estop_servo_position_);
+  vesc_.setServo(servo_clipped);
+  auto servo_sensor_msg = Float64();
+  servo_sensor_msg.data = servo_clipped;
+  servo_sensor_pub_->publish(servo_sensor_msg);
 }
 
 VescDriver::CommandLimit::CommandLimit(

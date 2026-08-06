@@ -23,6 +23,9 @@ public:
     loop_rate_hz_ = this->declare_parameter<double>("loop_rate_hz", 40.0);
 
     joy_toggle_button_idx_  = this->declare_parameter<int>("joy_toggle_button_idx", 5);
+    joy_estop_enabled_ = this->declare_parameter<bool>("joy_estop_enabled", true);
+    joy_estop_button_idx_ = this->declare_parameter<int>("joy_estop_button_idx", 2);
+    joy_estop_release_button_idx_ = this->declare_parameter<int>("joy_estop_release_button_idx", 3);
 
     // AUTO→JOY 전환 시 정지 펄스 지속 시간(ms)
     joy_stop_dwell_ms_ = this->declare_parameter<int>("joy_stop_dwell_ms", 300);
@@ -66,8 +69,15 @@ public:
       std::chrono::duration<double>(1.0 / loop_rate_hz_),
       std::bind(&TopController::loop, this));
 
-    RCLCPP_INFO(get_logger(), "TopController started. Mode=AUTO ctrl_mode=%s (toggle btn idx=%d, dwell=%d ms)",
-                ctrl_mode_.c_str(), joy_toggle_button_idx_, joy_stop_dwell_ms_);
+    RCLCPP_INFO(
+      get_logger(),
+      "TopController started. Mode=AUTO ctrl_mode=%s (toggle btn idx=%d, dwell=%d ms, estop=%s stop idx=%d release idx=%d)",
+      ctrl_mode_.c_str(),
+      joy_toggle_button_idx_,
+      joy_stop_dwell_ms_,
+      joy_estop_enabled_ ? "on" : "off",
+      joy_estop_button_idx_,
+      joy_estop_release_button_idx_);
   }
 
 private:
@@ -90,9 +100,10 @@ private:
     const auto &btns = msg->buttons;
 
     if (!last_buttons_) {
-      last_buttons_ = btns;
-      return;
+      last_buttons_ = std::vector<int>(btns.size(), 0);
     }
+
+    handle_joy_estop(btns);
 
     // JOY 토글 (버튼으로 AUTO<->JOY 토글)
     if (is_rising_edge(btns, joy_toggle_button_idx_)) {
@@ -122,8 +133,37 @@ private:
     return (curr && !prev);
   }
 
+  void handle_joy_estop(const std::vector<int>& buttons) {
+    if (!joy_estop_enabled_) return;
+
+    const bool stop_edge = is_rising_edge(buttons, joy_estop_button_idx_);
+    const bool release_edge = is_rising_edge(buttons, joy_estop_release_button_idx_);
+
+    if (!joy_estop_latched_ && stop_edge) {
+      joy_estop_latched_ = true;
+      publish_estop_stop();
+      RCLCPP_ERROR(
+        get_logger(),
+        "JOYSTICK E-STOP latched (button idx=%d). Press release button idx=%d to resume.",
+        joy_estop_button_idx_,
+        joy_estop_release_button_idx_);
+    } else if (joy_estop_latched_ && release_edge) {
+      joy_estop_latched_ = false;
+      RCLCPP_WARN(
+        get_logger(),
+        "Joystick e-stop released (button idx=%d).",
+        joy_estop_release_button_idx_);
+    }
+  }
+
   // ---- 메인 루프 ----
   void loop() {
+    if (joy_estop_enabled_ && joy_estop_latched_) {
+      publish_estop_stop();
+      RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000, "JOYSTICK E-STOP active.");
+      return;
+    }
+
     switch (mode_) {
       case ControlMode::JOY_ARMING:
         // dwell 동안 정지 명령만 퍼블리시 (안전 정지)
@@ -205,10 +245,21 @@ private:
     drive_pub_->publish(stop);
   }
 
+  void publish_estop_stop() {
+    publish_stop();
+
+    std_msgs::msg::Float64 duty;
+    duty.data = 0.0;
+    duty_pub_->publish(duty);
+  }
+
 private:
   // ---- 파라미터 ----
   double loop_rate_hz_{40.0};
   int joy_toggle_button_idx_{5};
+  bool joy_estop_enabled_{true};
+  int joy_estop_button_idx_{2};
+  int joy_estop_release_button_idx_{3};
   int joy_stop_dwell_ms_{300};     // AUTO→JOY 정지 펄스 시간
   std::string ctrl_mode_{"PP"};    // PP/MAP: 항상 L1, MPCC: 항상 MPCC (state 무관)
 
@@ -228,6 +279,7 @@ private:
   std::optional<mpcc_ros::msg::MpccControl> last_mpcc_;
   std::optional<f110_msgs::msg::L1controllerControl> last_l1_;
   std::optional<std::vector<int>> last_buttons_;
+  bool joy_estop_latched_{false};
   std::string state_; 
 
   // JOY 전이(arming) 끝나는 시각

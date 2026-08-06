@@ -33,12 +33,16 @@
 
 #include <ackermann_msgs/msg/ackermann_drive_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>
 #include <std_msgs/msg/float64.hpp>
+
+#include <vector>
 
 namespace vesc_ackermann
 {
 
 using ackermann_msgs::msg::AckermannDriveStamped;
+using sensor_msgs::msg::Joy;
 using std_msgs::msg::Float64;
 
 class AckermannToVesc : public rclcpp::Node
@@ -51,6 +55,10 @@ private:
   // conversion gain and offset
   double speed_to_erpm_gain_, speed_to_erpm_offset_;
   double steering_to_servo_gain_, steering_to_servo_offset_;
+  bool joy_estop_enabled_;
+  int joy_estop_button_idx_;
+  int joy_estop_release_button_idx_;
+  double joy_estop_publish_rate_hz_;
 
   /** @todo consider also providing an interpolated look-up table conversion */
 
@@ -58,9 +66,18 @@ private:
   rclcpp::Publisher<Float64>::SharedPtr erpm_pub_;
   rclcpp::Publisher<Float64>::SharedPtr servo_pub_;
   rclcpp::Subscription<AckermannDriveStamped>::SharedPtr ackermann_sub_;
+  rclcpp::Subscription<Joy>::SharedPtr joy_sub_;
+  rclcpp::TimerBase::SharedPtr estop_timer_;
+
+  bool joy_estop_latched_{false};
+  bool have_last_buttons_{false};
+  std::vector<int> last_buttons_;
 
   // ROS callbacks
   void ackermannCmdCallback(const AckermannDriveStamped::SharedPtr cmd);
+  void joyCallback(const Joy::SharedPtr msg);
+  bool isRisingEdge(const std::vector<int> & buttons, int idx) const;
+  void publishStopCommand();
 };
 
 }  // namespace vesc_ackermann

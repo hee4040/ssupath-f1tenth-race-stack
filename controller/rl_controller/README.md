@@ -1,14 +1,18 @@
 # rl_controller
 
-Isaac Lab(`~/shared_dir/dacerpp_isaaclab`)에서 학습한 **DACER++ 디퓨전 정책**을 실차에서
+Isaac Lab(`dacerpp_isaaclab`)에서 학습한 **DACER++ 디퓨전 정책**을 실차에서
 구동하는 컨트롤러. 학습 관측(58차원)을 실차 토픽으로 재구성해 30Hz 로
 `/l1controller/control` 을 발행하고, 기존 `mux_controller` 가 그것을 `/drive` 로 내보낸다.
 따라서 **조이스틱 오버라이드(LB 토글)와 `/e_stop` 이 그대로 살아 있다.**
 
+**가중치와 코드는 전부 이 레포 안에 있다.** 학습 워크스페이스(`~/shared_dir/...`)를
+참조하는 경로는 없다 (`models/README.md` 참조).
+
 ```
-/livox/lidar  ─┐
-/car_state/odom├─> rl_controller ─> /l1controller/control ─> mux_controller ─> /drive
-/centerline_wp ┘        (30Hz)                                 (joy/e_stop 우선)
+/livox/lidar        ─┐
+/car_state/odom      ├─> rl_controller ─> /l1controller/control ─> mux_controller ─> /drive
+/centerline_waypoints│        (30Hz)                                 (joy/e_stop 우선)
+/perception/obstacles┘   (상대차 5개 특징, 선택)
 ```
 
 ## 실행
@@ -16,37 +20,88 @@ Isaac Lab(`~/shared_dir/dacerpp_isaaclab`)에서 학습한 **DACER++ 디퓨전 �
 ```bash
 # 1) 측위/기반 (기존과 동일)
 ros2 launch stack_master base_system_3D_launch.xml racecar_version:=NUC2 \
-     map_dir:=lobby_0728 map_name:=lobby_0728 sim:=false rviz:=true
+     map_dir:=lobby_0806 map_name:=lobby_0806 sim:=false rviz:=true
 
-# 2) RL 주행
+# 2-a) RL 주행 + 장애물/상대차 인지  ← 권장
+ros2 launch stack_master time_trials_rl_launch.xml racecar_version:=NUC2 v_max:=5
+
+# 2-b) RL 주행만 (인지 없음. 상대차 관측은 항상 0 = 미검출)
 ros2 launch stack_master time_trials_launch.xml racecar_version:=NUC2 ctrl_algo:=RL v_max:=5
 ```
 
 `ctrl_algo:=RL` 이면 `l1_controller` 대신 `rl_controller` 가 뜬다. `v_max` 는
 **행동 -> 속도 매핑의 상한**이다(스로틀 +1 = v_max, -1 = v_min = 1.0 m/s).
 
+`time_trials_launch.xml` 과 `base_system_3D_launch.xml` 어디에도 perception 체인이
+없다 — 그래서 2-b 로 돌리면 `/perception/obstacles` 가 아예 발행되지 않는다.
+`time_trials_rl_launch.xml` 이 그 체인을 얹은 판이다.
+
 주행 전에 오프라인 점검:
 
 ```bash
 ros2 run rl_controller check_rl_setup.py \
-    --map ~/forza_ws/race_stack/stack_master/maps/lobby_0728 \
-    --bag ~/forza_ws/race_stack/lobby_0728
+    --map ~/forza_ws/race_stack/stack_master/maps/lobby_0806 \
+    --bag ~/forza_ws/race_stack/obs_debug_0806_1157
 ```
 
 ## 관측 (dacerpp_lab/racing_env.py `_observe_car` 와 동일 순서/정규화)
 
 | 인덱스 | 내용 | 출처 |
 |---|---|---|
-| 0:32 | 스캔 32빔 / 10m (전방 ±135°) | `/livox/lidar` -> 높이밴드 + 자차박스 제외 + 방위각 섹터 최소거리 |
+| 0:32 | 스캔 32빔 / 10m (전방 ±135°) — **벽 + 장애물 + 상대차가 모두 섞여 들어온다** | `/livox/lidar` -> 높이밴드 + 자차박스 제외 + 방위각 섹터 최소거리 |
 | 32 | 속력 / **10.0** (학습 정규화 상수, 주행 v_max 와 무관) | `/car_state/odom` twist |
 | 33:35 | sin/cos(헤딩오차) | odom yaw - 중심선 접선각 |
 | 35 | 횡오차 / 지역 반폭 (±1 = 벽) | 중심선 투영 |
-| 36:41 | 전방 곡률 5개 (+5/15/30/60/90 idx = 0.75/2.25/4.5/9/13.5 m) | 중심선 |
+| 36:41 | 전방 곡률 5개 (+5/15/30/60/90 idx = 0.75/2.25/4.5/9/13.5 m), **±2 클립** | 중심선 |
 | 41:47 | 현재+전방 반폭 6개 / 2.5m | 중심선 |
 | 47:51 | 직전 2스텝의 '명령' 행동 (지연 하 Markov 복원) | 노드 내부 |
-| 51:56 | 상대차량 5개 — **타임트라이얼이라 항상 0(미검출)** | - |
+| 51:56 | 상대차량 5개 `[rel_x/10, rel_y/10, (v자차-v상대)/10, gap_s/10, visible]` | `/perception/obstacles` 중 `is_static=False` 항목 |
 | 56 | 요레이트 / 4.0 | odom `twist.angular.z` (EKF wz), 폴백 IMU |
 | 57 | 횡속도 / 3.0 | odom `twist.linear.y` (carstate_3d 추정) |
+
+### 장애물과 상대차는 다른 채널이다
+
+학습(`dacerpp_lab/env_cfg.py` `obstacles_enabled` 주석)에서:
+
+- **장애물**(맵에 없는 ≤50cm 물체, 대회에서 리셋마다 2~3개): 상태 채널이 **없다.**
+  32빔 스캔에 footprint 를 오버레이할 뿐이다. 원문: *"별도 상태 채널을 안 써서
+  obs_dim 불변(58) = 실차에 장애물 감지 모듈 불필요."*
+  실차에서도 Livox 원본 클라우드에 물리적으로 잡히므로 이 노드의 의사 스캔이 그대로
+  재현한다. **인지 노드가 없어도 장애물 회피는 동작한다.**
+- **상대차**: 스캔에도 잡히고(overlay_opponent), 추가로 위 5개로 명시적으로 들어간다.
+  이건 실차에서 따로 채워 줘야 한다.
+
+perception 의 `tracking` 노드는 이 둘을 이미 구분해서 낸다 —
+`/perception/obstacles` 안에서 `is_static=False` + `vs`/`vd` 를 가진 항목이
+opponent EKF 로 추적 중인 동적 물체이고, 정적/미정 장애물은 `is_static=True` 다.
+그래서 **인지 노드를 고칠 필요가 없고**, 그 출력에서 동적 객체만 골라 학습 포맷으로
+바꾸면 된다(`obstacles_cb` / `opponent_features`).
+
+`tracking` 의 s/d 기준선은 **레이스라인**(`/global_waypoints`)이고 RL 관측은
+**중심선** 기준이라, 상대차를 일단 맵 좌표로 되돌린 뒤(`global_path.py`) 컨트롤러의
+`TrackReference` 에 다시 투영해 `gap_s` 를 구한다.
+
+`visible` 게이트는 학습(거리 <10m, |방위각| ≤135°, 벽에 가림 없음)을 따른다. 실차는
+검출 자체가 LiDAR 라 가림이 이미 반영돼 있어 거리/시야각만 다시 건다. 미검출이면
+5개 전부 0 — 학습에서 상대가 멀거나 가려졌을 때와 정확히 같은 입력이다.
+
+#### 실차 인지와 학습 가정의 차이 (전부 '더 비어 보이는' 쪽이라 안전)
+
+| 항목 | 학습 | 실차 perception |
+|---|---|---|
+| 검출 거리 | 10m (`scan_max_range`) | **7m** — 크롭 박스 `passthrough_filter_node.param.yaml` `y_min: -7.0` + `tracking` 의 `dist_infront: 7.0` |
+| 뒤쪽 상대차 | ±135° 안이면 보임 | **안 보임** — `tracking::checkInFront` 이 `0 < ds < dist_infront` 만 발행 |
+| 가림/미검출 | `visible=0` 즉시 | 놓친 뒤 최대 ~1초 EKF 외삽(`ttl=40 @40Hz`, `useTargetVel`)이 이어짐. 공분산 게이트(`var_pub`)가 스스로 끊는다 |
+
+7~10m 구간과 뒤쪽 상대차는 '미검출(전부 0)'로 들어가는데, 이는 학습에서 상대가
+10m 밖이거나 벽에 가려졌을 때와 **정확히 같은 입력**이다. 즉 정책이 없는 상대를
+쫓는 방향의 오류는 나지 않는다. 거리를 늘리려면 크롭 박스부터 키워야 하고
+(`dist_infront` 만 올려도 통과시킬 점군이 없다 — `stack_master/config/opponent_tracker_params.yaml`
+의 2026-08-04 실측 기록 참조) 그건 CPU/오검출 트레이드오프가 따로 있으므로
+여기서는 건드리지 않았다.
+
+EKF 외삽 구간이 거슬리면 `opp_timeout` 을 줄이는 대신 `opp_min_speed` 를 올리는 쪽이
+낫다(외삽 중에는 vs 가 `0.3 × 레이스라인 속도` 로 끌려간다).
 
 ### 기준선(중심선) 재구성
 
@@ -89,12 +144,24 @@ lobby_0728 bag 실측 기준값 (`config/rl_controller.yaml`):
 
 | 파라미터 | 기본 | 설명 |
 |---|---|---|
-| `checkpoint` | `.../20260726/cvar.pt` | 실차는 CVaR(보수) 가중치만 사용. `pow.pt` 는 상대차 스파링용 |
+| `checkpoint` | `20260805/pow.pt` | 상대경로면 패키지 `models/` 기준. **`pow.pt` 가 실차 배포 대상**(학습 car_b) — `models/README.md` 참조 |
+| `curv_clip` | 2.0 | 곡률 관측 클립. 20260805 세대부터 ±2. 구 `models/cvar.pt` 를 쓰면 1.0 으로 되돌릴 것 |
 | `v_max` | 5.0 (launch 인자) | 행동->속도 상한 |
 | `speed_mode` | `scale` | `scale`=v_min~v_max 로 선형 매핑, `clip`=학습대로 v_min~10 매핑 후 v_max 로 절단 |
-| `num_action_candidates` | 1 | >1 이면 QVN(CVaR)으로 후보 중 최선 선택. 3이면 추론 4.2 -> 11.4ms |
+| `opponent_enabled` | `true` | 상대차 관측 사용. perception 이 안 떠 있으면 자동으로 0(미검출) |
+| `opp_min_speed` | 0.3 | 이보다 느린 '동적' 물체는 유령으로 보고 무시 |
+| `opp_timeout` | 0.4 | 이보다 오래 갱신 없으면 미검출로 되돌림 |
+| `num_action_candidates` | 1 | >1 이면 QVN 으로 후보 중 최선 선택. 3이면 추론 4.2 -> 11.4ms |
 | `scan_z_min/max` | 0.02/0.30 | 높이 밴드 |
-| `device` | `cpu` | 이 젯슨의 pip torch(2.11)는 sm_87 커널이 없어 CUDA 실행이 실패한다. CPU 추론 4ms 로 충분 |
+| `device` | `cpu` | 이 젯슨의 pip torch(2.11)는 sm_87 커널이 없어 CUDA 실행이 실패한다. CPU 추론 5ms 로 충분 |
+
+### 학습 코드가 바뀌면 같이 볼 것
+
+관측 포맷을 정하는 곳은 `dacerpp_lab/racing_env.py` 의 `_observe_car` 와
+`dacerpp_lab/env_cfg.py` 의 `RacingCfg` 딱 두 곳이다. 노드 기동 시
+`n_beams / curv_lookahead / act_hist_len` 로 계산한 차원과 체크포인트의 `obs_dim` 이
+다르면 죽으므로 **차원이 바뀌는 변경은 자동으로 잡힌다.** 위험한 건 차원은 그대로인데
+정규화/클립만 바뀌는 경우다 (20260805 의 곡률 ±1 → ±2 가 정확히 그 경우였다).
 
 ## ★ 새 맵은 주행 전에 반드시 시뮬로 돌려볼 것
 

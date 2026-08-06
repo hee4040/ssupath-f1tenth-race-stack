@@ -105,32 +105,35 @@ git clone https://github.com/hee4040/ssupath-f1tenth-race-stack.git ~/forza_ws/r
 | `planner/fsdp/src/mpc_builder*.so` | 빌드 시 `mpc_builder.cpp` 에서 자동 생성 (`planner/fsdp/BUILD.md` 참고) |
 | rosbag (`obs_debug_*`, `lobby_07*`, `record/`) | 용량. 필요하면 별도 전달 |
 | `map.pcd`, `pose_graph.g2o` (루트) | SLAM 실행 산출물 |
-| Docker 이미지 / `shared_dir` | 호스트 바인드 마운트. 레포 범위 밖 |
+| Docker 이미지 / `shared_dir` | 호스트 바인드 마운트. 레포 범위 밖 — **런타임에 참조하는 곳은 없다** (RL 가중치는 레포에 복사됨) |
 
 반대로 `controller/mpcc/MPCC/C++/External/**/*.a` (blasfeo, hpipm) 는 ROS 빌드가
 자동 생성해주지 않는 외부 의존성이라 `.gitignore` 의 `*.a` 규칙에서 예외로 두고 포함했다.
 
 ### RL 컨트롤러 체크포인트
 
-실차 주행용 가중치를 `controller/rl_controller/models/cvar.pt` 로 포함해 두었다.
+**가중치는 레포 안에만 있다.** 개발 컨테이너의 학습 워크스페이스(`~/shared_dir/...`)를
+참조하는 경로는 코드/설정 어디에도 없다.
 
-`controller/rl_controller/config/rl_controller.yaml` 의 `checkpoint` 는 개발 컨테이너
-경로(`/home/misys/shared_dir/dacerpp_isaaclab/dacerpp_runs/20260726/cvar.pt`)를 그대로
-가리키고 있다. 다른 환경에서는 아래 중 하나로 바꿔서 쓴다.
-
-체크포인트 경로는 launch 인자로 노출되어 있지 않고 param 파일 한 곳에서만 관리한다
-(`rl_controller_launch.xml` 주석 참고). 따라서:
-
-```bash
-# 방법 1: yaml 의 checkpoint 값을 레포 안 경로로 직접 수정 (권장)
-#   checkpoint: "/home/<user>/forza_ws/race_stack/controller/rl_controller/models/cvar.pt"
-
-# 방법 2: yaml 을 복사해 경로만 고치고 rl_param_file 로 넘기기
-ros2 launch rl_controller rl_controller_launch.xml \
-  rl_param_file:=/path/to/my_rl_controller.yaml
+```
+controller/rl_controller/models/
+├── README.md            # 어떤 체크포인트가 어떤 관측 규약인지
+├── 20260805/pow.pt      # ★ 실차 주행 기본값 (학습 car_b = 배포 대상)
+├── 20260805/cvar.pt     # 같은 런의 보수적 정책
+└── cvar.pt              # 구세대(20260726). 쓰려면 curv_clip 을 1.0 으로
 ```
 
-주의: 방법 1 로 yaml 을 고쳤으면 `colcon build --packages-select rl_controller` 를 다시
-돌려야 `install/` 쪽 share 에 반영된다.
+`config/rl_controller.yaml` 의 `checkpoint` 는 **상대경로면 이 디렉터리 기준**으로
+해석된다(절대경로도 그대로 받는다). 기본값은 `"20260805/pow.pt"` 라 다른 환경에
+그대로 옮겨도 동작한다. 다른 가중치를 쓰려면 그 값만 바꾸고
+
+```bash
+colcon build --packages-select rl_controller
+```
+
+로 install 공간에 반영하면 된다(`setup.py` 가 `models/` 를 share 로 설치한다).
+
+체크포인트를 바꿀 때는 `curv_clip` 을 같이 맞춰야 한다 — 20260805 세대는 곡률 관측
+클립이 ±2, 그 이전은 ±1 이다. 자세한 건 `models/README.md`.
 
 Jetson Orin 에서는 pip torch 가 sm_87 커널을 포함하지 않으므로 `device: "cpu"` 를 유지할 것.

@@ -10,6 +10,9 @@
   <arg name="v_max" default="5.0"/>
   <arg name="rl_param_file" default="$(find-pkg-share rl_controller)/config/rl_controller.yaml"/>
   <arg name="rl_scan_source" default="cloud" description="cloud(실차 Livox) / laserscan(시뮬)"/>
+  <!-- 상대차 관측(obs[51:56]) 사용 여부. perception 체인(/perception/obstacles)이
+       떠 있어야 실제로 값이 채워지고, 없으면 자동으로 0(미검출) 이라 켜 두어도 안전하다. -->
+  <arg name="rl_opponent" default="true"/>
 
   <!-- 레이싱카 버전 (L1 YAML 경로에 사용) -->
   <arg name="racecar_version" default="NUC2"/>
@@ -51,6 +54,7 @@
          double 로 선언된 파라미터와 타입이 어긋난다. -->
     <param name="v_max" value="$(var v_max)" type="float"/>
     <param name="scan_source" value="$(var rl_scan_source)" type="str"/>
+    <param name="opponent_enabled" value="$(var rl_opponent)" type="bool"/>
   </node>
 
   <!-- mpcc_node: MPCC 모드일 때만 실행.

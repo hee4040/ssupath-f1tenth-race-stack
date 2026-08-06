@@ -1,8 +1,8 @@
 /**:
   ros__parameters:
-    z_max : 0.3
+    z_max : 0.3    #덕트 높이까지 자르는걸 추천
     z_min : 0.01
-    x_max : 4.0
+    x_max : 4.0    #차량 왼쪽
     x_min : -4.0
     y_max : 0.0
-    y_min : -7.0
+    y_min : -7.0   #차량전방

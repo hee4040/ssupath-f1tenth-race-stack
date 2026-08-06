@@ -61,9 +61,11 @@ def describe_track(tr) -> None:
               + ", ".join(f"{a:.1f}~{b:.1f}" for a, b in spans(hard)))
         print("      -> 중심선을 그대로 못 따라가므로 코리도 폭을 쓰는 라인이 필요하다 "
               "(학습 절차 트랙에도 이런 구간은 있다: 60종 중 33종, 최대 2.5%)")
-    clipped = k > 1.0
+    # 20260805 세대부터 곡률 관측 클립이 ±2 다 (offline_sim.CURV_CLIP 와 동일 상수).
+    from rl_controller.offline_sim import CURV_CLIP
+    clipped = k > CURV_CLIP
     if clipped.any():
-        print(f"    곡률 관측 포화(|kappa|>1.0 은 관측에서 1.0 으로 잘림) "
+        print(f"    곡률 관측 포화(|kappa|>{CURV_CLIP:.0f} 은 관측에서 잘림) "
               f"{clipped.sum() * ds:.1f}m ({clipped.mean():.1%})")
     sig = np.where(k > 0.5, np.sign(tr.kappa), 0)
     idx = [i for i, v in enumerate(sig) if v != 0]
@@ -77,9 +79,8 @@ def describe_track(tr) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint",
-                    default=os.path.expanduser(
-                        "~/shared_dir/dacerpp_isaaclab/dacerpp_runs/20260726/cvar.pt"))
+    # 상대경로면 패키지의 models/ 기준으로 해석된다 (노드와 동일 규칙).
+    ap.add_argument("--checkpoint", default="20260805/pow.pt")
     ap.add_argument("--map", default="", help="stack_master/maps/<name> 폴더")
     ap.add_argument("--bag", default="", help="rosbag2 폴더 (/livox/lidar 포함)")
     ap.add_argument("--z-bands", default="0.02:0.30,0.00:0.35,0.05:0.25",
@@ -92,17 +93,19 @@ def main() -> int:
     ap.add_argument("--rollout-seconds", type=float, default=30.0)
     args = ap.parse_args()
 
+    from rl_controller.checkpoints import resolve_checkpoint
     from rl_controller.policy import DacerPolicy
     from rl_controller.scan_builder import PseudoScanBuilder
     from rl_controller.track_reference import TrackReference
 
+    ckpt = resolve_checkpoint(args.checkpoint)
     print("=" * 72)
-    print(f"[1] 체크포인트: {args.checkpoint}")
-    if not os.path.isfile(args.checkpoint):
+    print(f"[1] 체크포인트: {ckpt}")
+    if not os.path.isfile(ckpt):
         print("    ! 파일이 없습니다")
         return 1
     t0 = time.perf_counter()
-    pol = DacerPolicy.load(args.checkpoint, device="cpu")
+    pol = DacerPolicy.load(ckpt, device="cpu")
     print(f"    obs_dim={pol.obs_dim} act_dim={pol.act_dim} "
           f"risk={pol.risk_measure}({pol.risk_eta}) T={pol._T} "
           f"(로드 {time.perf_counter() - t0:.1f}s)")
