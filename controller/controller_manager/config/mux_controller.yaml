@@ -13,6 +13,14 @@ mux_controller:
     joy_estop_button_idx: 2
     joy_estop_release_button_idx: 3
 
+    # AUTO start gate:
+    #   X/Cross(idx 1)을 누르고 있는 동안 AUTO 명령을 정지/중앙정렬로 막고,
+    #   떼는 순간 AUTO 명령을 다시 허용한다.
+    #   O/Triangle e-stop은 비상정지용으로 그대로 유지한다.
+    start_hold_enabled: true
+    start_hold_button_idx: 1
+    start_hold_servo_position: 0.5
+
     # AUTO -> JOY 전환 시 정지 펄스 시간 [ms]
     joy_stop_dwell_ms: 300
 

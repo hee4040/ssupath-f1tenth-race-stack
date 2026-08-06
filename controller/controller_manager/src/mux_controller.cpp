@@ -26,6 +26,9 @@ public:
     joy_estop_enabled_ = this->declare_parameter<bool>("joy_estop_enabled", true);
     joy_estop_button_idx_ = this->declare_parameter<int>("joy_estop_button_idx", 2);
     joy_estop_release_button_idx_ = this->declare_parameter<int>("joy_estop_release_button_idx", 3);
+    start_hold_enabled_ = this->declare_parameter<bool>("start_hold_enabled", true);
+    start_hold_button_idx_ = this->declare_parameter<int>("start_hold_button_idx", 1);
+    start_hold_servo_position_ = this->declare_parameter<double>("start_hold_servo_position", 0.5);
 
     // AUTO→JOY 전환 시 정지 펄스 지속 시간(ms)
     joy_stop_dwell_ms_ = this->declare_parameter<int>("joy_stop_dwell_ms", 300);
@@ -71,13 +74,15 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "TopController started. Mode=AUTO ctrl_mode=%s (toggle btn idx=%d, dwell=%d ms, estop=%s stop idx=%d release idx=%d)",
+      "TopController started. Mode=AUTO ctrl_mode=%s (toggle btn idx=%d, dwell=%d ms, estop=%s stop idx=%d release idx=%d, start_hold=%s idx=%d)",
       ctrl_mode_.c_str(),
       joy_toggle_button_idx_,
       joy_stop_dwell_ms_,
       joy_estop_enabled_ ? "on" : "off",
       joy_estop_button_idx_,
-      joy_estop_release_button_idx_);
+      joy_estop_release_button_idx_,
+      start_hold_enabled_ ? "on" : "off",
+      start_hold_button_idx_);
   }
 
 private:
@@ -104,6 +109,7 @@ private:
     }
 
     handle_joy_estop(btns);
+    handle_start_hold(btns);
 
     // JOY 토글 (버튼으로 AUTO<->JOY 토글)
     if (is_rising_edge(btns, joy_toggle_button_idx_)) {
@@ -156,6 +162,29 @@ private:
     }
   }
 
+  void handle_start_hold(const std::vector<int>& buttons) {
+    if (!start_hold_enabled_ || start_hold_button_idx_ < 0) {
+      start_hold_pressed_ = false;
+      return;
+    }
+
+    const auto idx = static_cast<size_t>(start_hold_button_idx_);
+    const bool pressed = idx < buttons.size() && buttons[idx] == 1;
+
+    if (pressed && !start_hold_pressed_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Start hold button pressed (idx=%d). AUTO commands paused until release.",
+        start_hold_button_idx_);
+    } else if (!pressed && start_hold_pressed_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Start hold released (idx=%d) -> AUTO commands resumed.",
+        start_hold_button_idx_);
+    }
+    start_hold_pressed_ = pressed;
+  }
+
   // ---- 메인 루프 ----
   void loop() {
     if (joy_estop_enabled_ && joy_estop_latched_) {
@@ -183,6 +212,15 @@ private:
       case ControlMode::AUTO:
       default:
         break;
+    }
+
+    if (start_hold_enabled_ && start_hold_pressed_) {
+      publish_start_hold_stop();
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "START HOLD active. Release button idx=%d to resume AUTO.",
+        start_hold_button_idx_);
+      return;
     }
 
     // ===== AUTO 모드 로직 =====
@@ -253,6 +291,14 @@ private:
     duty_pub_->publish(duty);
   }
 
+  void publish_start_hold_stop() {
+    publish_estop_stop();
+
+    std_msgs::msg::Float64 servo;
+    servo.data = start_hold_servo_position_;
+    servo_pub_->publish(servo);
+  }
+
 private:
   // ---- 파라미터 ----
   double loop_rate_hz_{40.0};
@@ -260,6 +306,9 @@ private:
   bool joy_estop_enabled_{true};
   int joy_estop_button_idx_{2};
   int joy_estop_release_button_idx_{3};
+  bool start_hold_enabled_{true};
+  int start_hold_button_idx_{1};
+  double start_hold_servo_position_{0.5};
   int joy_stop_dwell_ms_{300};     // AUTO→JOY 정지 펄스 시간
   std::string ctrl_mode_{"PP"};    // PP/MAP: 항상 L1, MPCC: 항상 MPCC (state 무관)
 
@@ -280,6 +329,7 @@ private:
   std::optional<f110_msgs::msg::L1controllerControl> last_l1_;
   std::optional<std::vector<int>> last_buttons_;
   bool joy_estop_latched_{false};
+  bool start_hold_pressed_{false};
   std::string state_; 
 
   // JOY 전이(arming) 끝나는 시각
