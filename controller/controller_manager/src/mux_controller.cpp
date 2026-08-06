@@ -9,6 +9,7 @@
 #include "ackermann_msgs/msg/ackermann_drive_stamped.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/bool.hpp"
 
 // 커스텀 메시지
 #include "mpcc_ros/msg/mpcc_control.hpp"              // duty_cycle, servo, solver_status
@@ -60,6 +61,11 @@ public:
       [this](const std_msgs::msg::String::SharedPtr msg){
         state_ = msg->data;
       });
+
+    // E-STOP 구독: 외부에서 긴급정지 신호를 보내면 모든 제어 출력 우선 정지
+    e_stop_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+      "/e_stop", rclcpp::QoS(1),
+      std::bind(&TopController::on_e_stop, this, std::placeholders::_1));
 
     // ---- 타이머 루프 ----
     timer_ = this->create_wall_timer(
@@ -124,6 +130,13 @@ private:
 
   // ---- 메인 루프 ----
   void loop() {
+    // E-STOP이 걸려있으면 모든 제어보다 우선하여 정지 명령을 퍼블리시
+    if (e_stop_) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "E-STOP active -> publishing stop.");
+      publish_stop();
+      return;
+    }
+
     switch (mode_) {
       case ControlMode::JOY_ARMING:
         // dwell 동안 정지 명령만 퍼블리시 (안전 정지)
@@ -205,6 +218,15 @@ private:
     drive_pub_->publish(stop);
   }
 
+  void on_e_stop(const std_msgs::msg::Bool::SharedPtr msg) {
+    e_stop_ = msg->data;
+    if (e_stop_) {
+      RCLCPP_WARN(get_logger(), "/e_stop true received -> E-STOP engaged");
+    } else {
+      RCLCPP_INFO(get_logger(), "/e_stop false received -> E-STOP released");
+    }
+  }
+
 private:
   // ---- 파라미터 ----
   double loop_rate_hz_{40.0};
@@ -222,6 +244,7 @@ private:
   rclcpp::Subscription<f110_msgs::msg::L1controllerControl>::SharedPtr l1_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr state_sub_; 
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr e_stop_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 
   // ---- 상태 ----
@@ -238,6 +261,7 @@ private:
   std::deque<bool> mpcc_ok_hist_;
   int mpcc_timeout_ms_{200};        // 이보다 오래된 MPCC 메시지는 불안정 취급
   rclcpp::Time last_mpcc_rx_time_;  // on_mpcc에서만 설정 (last_mpcc_ 있을 때만 읽음)
+  bool e_stop_{false};
 };
 
 int main(int argc, char **argv) {

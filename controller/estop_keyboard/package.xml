@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>estop_keyboard</name>
+  <version>0.1.0</version>
+  <description>Keyboard-driven E-STOP publisher for ForzaETH race stack</description>
+  <maintainer email="you@example.com">ssupath</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+</package>
