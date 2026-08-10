@@ -6,9 +6,9 @@ l1_controller:
     # q_l1: -0.167
     m_l1: 0.4 #기존 0.4 
     # 0715 위빙(1.8Hz 조향 진동) 완화: lookahead 연장으로 루프 이득 저감 (0.4 -> 0.7)
-    q_l1: 0.4   #기존 0.3
+    q_l1: 0.2   #기존 0.3
     speed_lookahead: 0.0
-    lat_err_coeff: 0.6 #기존 0.4
+    lat_err_coeff: 0.2 #기존 0.4
     # acc_scaler_for_steer_safe: 1.2
     # dec_scaler_for_steer_safe: 0.9 
     # acc_scaler_for_steer_aggressive: 1.1

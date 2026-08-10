@@ -12,7 +12,7 @@
     # 부작용: 너무 줄이면 벽 점군 자체가 장애물로 잡혀 유령이 생긴다.
     #   유령이 늘면 0.05 로 되돌리고, 그래도 벽쪽을 못 잡으면 0.0 까지 내려볼 것.
     # 변경 후 노드 재시작 필요(파라미터 콜백 없음).
-    boundaries_inflation: 0.06
+    boundaries_inflation: 0.07
 
     # 전방 장애물 탐지 거리 [m]. cpp 기본값 5.0.
     # laserPointOnTrack 에서 wrap_s(obs_s - car_s) > 이 값 이면 버린다.
