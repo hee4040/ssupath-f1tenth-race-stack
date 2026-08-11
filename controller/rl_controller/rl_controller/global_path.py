@@ -54,13 +54,17 @@ class GlobalPath:
         return cls(s, x, y)
 
     # ------------------------------------------------------------------ #
-    def to_cartesian(self, s: float, d: float) -> Tuple[float, float]:
-        """Frenet (s, d) -> 맵 (x, y). s 는 [0, 랩길이) 로 래핑한다."""
+    def _segment(self, s: float) -> int:
+        """s 가 속한 세그먼트 인덱스. s 는 [0, 랩길이) 로 래핑한다."""
         s = math.fmod(float(s), self.total_s)
         if s < 0.0:
             s += self.total_s
         i = int(np.searchsorted(self.s, s, side="right") - 1)
-        i = min(max(i, 0), len(self.seglen) - 1)
+        return min(max(i, 0), len(self.seglen) - 1), s
+
+    def to_cartesian(self, s: float, d: float) -> Tuple[float, float]:
+        """Frenet (s, d) -> 맵 (x, y). s 는 [0, 랩길이) 로 래핑한다."""
+        i, s = self._segment(s)
         t = (s - self.s[i]) / self.seglen[i]
         px = self.x[i] + t * self.dx[i]
         py = self.y[i] + t * self.dy[i]
@@ -68,6 +72,11 @@ class GlobalPath:
         nx = -self.dy[i] / self.seglen[i]
         ny = self.dx[i] / self.seglen[i]
         return float(px + d * nx), float(py + d * ny)
+
+    def psi_at(self, s: float) -> float:
+        """s 지점의 레이스라인 접선 방위각(맵 프레임). 상대차 헤딩 추정에 쓴다."""
+        i, _ = self._segment(s)
+        return float(math.atan2(self.dy[i], self.dx[i]))
 
     def summary(self) -> str:
         return f"n={len(self.s) - 1} lap={self.total_s:.1f}m"

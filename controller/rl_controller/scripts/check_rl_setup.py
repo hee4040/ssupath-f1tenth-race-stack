@@ -80,7 +80,7 @@ def describe_track(tr) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     # 상대경로면 패키지의 models/ 기준으로 해석된다 (노드와 동일 규칙).
-    ap.add_argument("--checkpoint", default="20260805/pow.pt")
+    ap.add_argument("--checkpoint", default="pow.pt")
     ap.add_argument("--map", default="", help="stack_master/maps/<name> 폴더")
     ap.add_argument("--bag", default="", help="rosbag2 폴더 (/livox/lidar 포함)")
     ap.add_argument("--z-bands", default="0.02:0.30,0.00:0.35,0.05:0.25",
@@ -91,6 +91,11 @@ def main() -> int:
     ap.add_argument("--rollout-speeds", default="2.0,3.0,5.0")
     ap.add_argument("--rollout-starts", type=int, default=6)
     ap.add_argument("--rollout-seconds", type=float, default=30.0)
+    # 기본은 학습 공칭 마찰(offline_sim.MU_NOM). 학습이 μ 를 크게 올려 놨으므로
+    # (0.75 -> 1.05, 밴드 0.85~1.25) '실제 도막이 그보다 낮으면?' 을 반드시 같이 볼 것.
+    # 예: --mu 0.65 로 돌려 완주율이 무너지면 그 정책은 실차에서 위험하다.
+    ap.add_argument("--mu", type=float, default=None,
+                    help="폐루프 시뮬 지면 마찰 (기본: 학습 공칭값). 낮춰서 sim2real 여유 확인")
     args = ap.parse_args()
 
     from rl_controller.checkpoints import resolve_checkpoint
@@ -135,11 +140,14 @@ def main() -> int:
         describe_track(tr)
 
         if args.rollout:
-            from rl_controller.offline_sim import evaluate
+            from rl_controller.offline_sim import MU_NOM, evaluate
+            mu = MU_NOM if args.mu is None else args.mu
             print("    ---- 폐루프 시뮬 (학습 타이어 모델, 실차 사고를 재현하는 유일한 검사) ----")
+            print(f"    지면 마찰 mu={mu:.2f}"
+                  + ("  (학습 공칭값)" if args.mu is None else f"  (학습 공칭 {MU_NOM:.2f} 대비 낮춤)"))
             vs = [float(v) for v in args.rollout_speeds.split(",")]
             res = evaluate(tr, pol, v_max_list=vs, starts=args.rollout_starts,
-                           seconds=args.rollout_seconds, log=lambda m: print(m))
+                           seconds=args.rollout_seconds, mu=mu, log=lambda m: print(m))
             best = max(res.items(), key=lambda kv: (kv[1]["ok"], kv[1]["travelled"]))
             if best[1]["ok"] < best[1]["n"]:
                 print("    ==> 어떤 속도에서도 완주하지 못했습니다. 실패 지점의 s 를 보고 "

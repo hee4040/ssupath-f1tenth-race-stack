@@ -98,7 +98,7 @@ class RLControllerNode(Node):
         p("curv_lookahead", [5, 15, 30, 60, 90])
         # 곡률 관측 클립. 학습 20260805 부터 ±1 -> ±2 (racing_env._observe_car 주석:
         # 대회 코스는 |kappa| 가 1.93 까지 가는데 ±1 클립이 '급코너 vs 아주 급한 코너'를
-        # 뭉갰다). 구 체크포인트(models/cvar.pt)를 쓸 때만 1.0 으로 되돌릴 것.
+        # 뭉갰다). ±1 세대 체크포인트를 실을 때만 1.0 으로 되돌릴 것.
         p("curv_clip", 2.0)
         p("hw_ref", 2.5)                    # 학습 0.5*TrackParams.width_max
         p("yawrate_norm", 4.0)
@@ -113,6 +113,12 @@ class RLControllerNode(Node):
         p("opp_min_speed", 0.3)             # 이보다 느리면 상대차로 인정 안 함(유령 방지)
         p("opp_require_dynamic", True)      # is_static=False 인 것만 상대차로 본다
         p("opp_gap_norm", 10.0)             # 학습 gap_s 정규화 상수(고정)
+        # 대회 규정상 각 차량 뒷부분에 '감지 박스'(12x12cm, 지면 10~30cm)를 단다.
+        # 실차 LiDAR 는 그 높이 밴드에서 이 박스만 보므로(섀시 축고 6cm 는 밴드 아래)
+        # perception 이 주는 위치는 '박스 중심' = 차중심에서 뒤로 이만큼이다.
+        # 학습 관측의 rel_x/rel_y/gap_s 는 '차중심' 기준이라 이 오프셋을 되돌린다
+        # (학습 env_cfg.det_box_rear 와 같은 값). 0.0 = 보정 끔(박스 미장착 시).
+        p("opp_det_box_rear", 0.20)
 
         p("odom_topic", "/car_state/odom")
         p("centerline_topic", "/centerline_waypoints")
@@ -150,6 +156,7 @@ class RLControllerNode(Node):
         self.opp_min_speed = float(g("opp_min_speed"))
         self.opp_require_dynamic = bool(g("opp_require_dynamic"))
         self.opp_gap_norm = float(g("opp_gap_norm"))
+        self.opp_det_box_rear = float(g("opp_det_box_rear"))
 
         if self.v_max <= self.v_min:
             raise RuntimeError(f"v_max({self.v_max}) 는 v_min({self.v_min}) 보다 커야 합니다")
@@ -280,7 +287,7 @@ class RLControllerNode(Node):
         self.get_logger().info(f"레이스라인 수신: {self.glob.summary()} (상대차 s/d -> 맵 변환용)")
 
     def obstacles_cb(self, msg: ObstacleArray):
-        """/perception/obstacles -> 상대차량 1대의 맵 좌표 + 속력.
+        """/perception/obstacles -> 상대차량 1대의 맵 좌표(차중심) + 속력.
 
         tracking 노드는 한 배열 안에 정적 장애물과 상대차를 섞어 보내지만
         구분 자체는 되어 있다:
@@ -288,6 +295,12 @@ class RLControllerNode(Node):
           - is_static=False : opponent EKF 가 추적 중인 동적 물체 = 상대차.
         여기서는 후자만 골라 쓴다. 정적 장애물을 상대차 채널에 넣으면 학습 분포와
         어긋난다 (학습에서 장애물은 스캔에만 존재한다).
+
+        ★ 감지 박스 보정: 대회 규정상 LiDAR 에 잡히는 것은 상대차 뒷부분의
+        12x12cm 감지 박스뿐이라(높이 10~30cm 밴드) perception 이 주는 위치는
+        '박스 중심'이다. 학습 관측(rel_x/rel_y/gap_s)은 '차중심' 기준이므로
+        상대차 헤딩 방향으로 opp_det_box_rear 만큼 앞으로 되돌려 준다.
+        헤딩은 Frenet 속도에서 얻는다: heading = psi(s) + atan2(vd, vs).
         """
         if self.glob is None:
             return
@@ -295,10 +308,18 @@ class RLControllerNode(Node):
         for o in msg.obstacles:
             if self.opp_require_dynamic and o.is_static:
                 continue
-            speed = math.hypot(float(o.vs), float(o.vd))
+            vs, vd = float(o.vs), float(o.vd)
+            speed = math.hypot(vs, vd)
             if speed < self.opp_min_speed:
                 continue
-            xy = self.glob.to_cartesian(float(o.s_center), float(o.d_center))
+            s_c, d_c = float(o.s_center), float(o.d_center)
+            bx, by = self.glob.to_cartesian(s_c, d_c)          # 감지 박스 중심
+            if self.opp_det_box_rear != 0.0:
+                heading = self.glob.psi_at(s_c) + math.atan2(vd, vs)
+                xy = (bx + self.opp_det_box_rear * math.cos(heading),
+                      by + self.opp_det_box_rear * math.sin(heading))
+            else:
+                xy = (bx, by)
             if self.pose is not None:
                 d = math.hypot(xy[0] - self.pose[0], xy[1] - self.pose[1])
             else:

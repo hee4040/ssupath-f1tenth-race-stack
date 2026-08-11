@@ -24,7 +24,15 @@ from typing import Optional, Sequence
 import numpy as np
 
 # ---- 학습 파라미터 (dacerpp_lab/env_cfg.py TireModelCfg / RacingCfg) ----
-MU_NOM, ALPHA_CHAR = 0.75, 0.08
+# 공칭 마찰. 학습 TireModelCfg.mu 와 같은 값을 쓴다 — 이 값이 학습과 다르면
+# "정책이 자기 세계에서 도는가"라는 질문 자체가 성립하지 않는다.
+# 이력: 0.75 -> 0.90(2026-08-07) -> 1.05(2026-08-09). 실차가 코너에서 바깥벽에
+# 붙는 과보수 주행을 그립 부족 인식으로 보고 학습 그립을 올린 실험이다
+# (학습 mu_range 0.85~1.25).
+# ★ 학습 주석의 경고 그대로: 실제 도막 그립이 이보다 낮으면 정책이 그립을
+#   과대평가해 언더스티어가 재발할 수 있다. check_rl_setup.py --mu 로 낮은 마찰에서도
+#   돌려 보고, 현장 스키드패드 실측이 나오면 이 값을 그 값으로 고칠 것.
+MU_NOM, ALPHA_CHAR = 1.05, 0.08
 MASS, COM_H, LF, LR = 3.94, 0.07, 0.149, 0.181
 K_DRIVE, F_DRIVE_MAX, C_ROLL, V_LAT_TAPER = 40.0, 22.0, 0.015, 0.3
 IZZ, G = 0.084, 9.81
@@ -35,7 +43,7 @@ N_BEAMS, FOV, RMAX = 32, 2.356, 10.0
 HW_REF, OBS_VMAX, V_MIN = 2.5, 10.0, 1.0
 CURV_OFF = (5, 15, 30, 60, 90)
 WIDTH_OFF = (0,) + CURV_OFF
-# 곡률 관측 클립. 20260805 세대 학습부터 ±2 (구세대 체크포인트를 검증할 때만 1.0).
+# 곡률 관측 클립. 20260805 세대 학습부터 ±2 (config 의 curv_clip 과 같은 값을 유지할 것).
 CURV_CLIP = 2.0
 OFFTRACK_MARGIN, SPIN_HERR = -0.20, 1.745
 ANGLES = np.linspace(-FOV, FOV, N_BEAMS)

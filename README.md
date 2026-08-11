@@ -117,23 +117,24 @@ git clone https://github.com/hee4040/ssupath-f1tenth-race-stack.git ~/forza_ws/r
 
 ```
 controller/rl_controller/models/
-├── README.md            # 어떤 체크포인트가 어떤 관측 규약인지
-├── 20260805/pow.pt      # ★ 실차 주행 기본값 (학습 car_b = 배포 대상)
-├── 20260805/cvar.pt     # 같은 런의 보수적 정책
-└── cvar.pt              # 구세대(20260726). 쓰려면 curv_clip 을 1.0 으로
+├── README.md       # 갱신 절차 + 관측 규약 대응표
+├── pow.pt          # ★ 실차 주행 기본값 (학습 car_b = 배포 대상)
+├── cvar.pt         # 같은 런의 보수적 정책
+└── train_meta.json
 ```
 
+**최신 런의 두 파일만 둔다** (날짜 폴더를 만들지 않는다). 현재 실린 건 20260810.
 `config/rl_controller.yaml` 의 `checkpoint` 는 **상대경로면 이 디렉터리 기준**으로
-해석된다(절대경로도 그대로 받는다). 기본값은 `"20260805/pow.pt"` 라 다른 환경에
-그대로 옮겨도 동작한다. 다른 가중치를 쓰려면 그 값만 바꾸고
+해석되고(절대경로도 그대로 받는다) 기본값이 `"pow.pt"` 라, 갱신은 파일만 덮어쓰고
 
 ```bash
 colcon build --packages-select rl_controller
 ```
 
-로 install 공간에 반영하면 된다(`setup.py` 가 `models/` 를 share 로 설치한다).
+하면 끝난다(`setup.py` 가 `models/*.pt` 를 글롭으로 share 에 설치한다).
 
-체크포인트를 바꿀 때는 `curv_clip` 을 같이 맞춰야 한다 — 20260805 세대는 곡률 관측
-클립이 ±2, 그 이전은 ±1 이다. 자세한 건 `models/README.md`.
+학습 코드가 바뀐 채로 가중치만 갈아끼우면 위험하다 — 차원이 바뀌면 노드가 기동 시
+죽지만, **정규화/클립/기준점만 바뀌면 조용히 틀린 입력이 들어간다.** 지금까지 그런
+변경이 둘 있었고(`curv_clip`, `opp_det_box_rear`) 대응표는 `models/README.md` 에 있다.
 
 Jetson Orin 에서는 pip torch 가 sm_87 커널을 포함하지 않으므로 `device: "cpu"` 를 유지할 것.

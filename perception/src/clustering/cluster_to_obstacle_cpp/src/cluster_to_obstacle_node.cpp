@@ -35,7 +35,23 @@ public:
 
     // ---------- Parameters ----------
     this->declare_parameter<double>("boundaries_inflation", 0.1);
-    frenet_waypoints_topic_ = declare_parameter<std::string>("frenet_waypoints_topic", "/global_waypoints");
+    // 트랙 경계(d_left/d_right)를 어디서 받을지.
+    // 기본값은 원본 맵(<map>_origin.png) 기준으로 보정된 경계다. 편집 맵은 레이스라인이
+    // 새지 않도록 알코브를 메워 놓기 때문에 그 구간 경계가 실제 벽보다 안쪽이고,
+    // 그러면 거기 놓인 진짜 장애물이 "트랙 밖"으로 버려진다. 판정 기준은 실제 벽이어야 한다.
+    // (발행: global_trajectory_publisher / 계산: global_planner/origin_map_bounds.py)
+    // s/d 프레네 기준선 자체는 /global_waypoints 와 완전히 동일하므로 하류 좌표는 안 바뀐다.
+    frenet_waypoints_topic_ = declare_parameter<std::string>("frenet_waypoints_topic",
+                                                             "/global_waypoints/original_bounds");
+    // 위 토픽이 안 뜰 때(구버전 global_trajectory_publisher 등) 쓰는 대비책.
+    // 이게 없으면 경계를 못 받아 클러스터를 전부 버린다 = 장애물 탐지가 통째로 죽는다.
+    fallback_waypoints_topic_ = declare_parameter<std::string>("fallback_waypoints_topic",
+                                                               "/global_waypoints");
+    // 폴백을 받아들이기 전에 원본 경계를 기다려 주는 시간 [s].
+    // global_trajectory_publisher 는 두 토픽을 같은 주기(5 s)에 연달아 발행하므로
+    // 이 유예가 없으면 매 기동마다 폴백 경고가 한 번씩 헛되이 뜬다.
+    fallback_grace_period_ = declare_parameter<double>("fallback_grace_period", 8.0);
+    node_start_ = now();
     cluster_topic_          = declare_parameter<std::string>("cluster_topic", "/clusters");
     obstacle_pub_topic_     = declare_parameter<std::string>("obstacle_pub_topic", "/perception/detection/raw_obstacles");
     obstacle_marker_topic_  = declare_parameter<std::string>("obstacle_marker_topic", "/perception/detection/obstacles_markers");
@@ -58,7 +74,14 @@ public:
 
     // ---------- Subscribers ----------
     wp_sub_ = create_subscription<f110_msgs::msg::WpntArray>(
-      frenet_waypoints_topic_, 10, std::bind(&ClusterToObstacle::pathCb, this, _1));
+      frenet_waypoints_topic_, 10,
+      [this](const f110_msgs::msg::WpntArray::SharedPtr msg) { pathCb(msg, true); });
+
+    if (!fallback_waypoints_topic_.empty() && fallback_waypoints_topic_ != frenet_waypoints_topic_) {
+      wp_fallback_sub_ = create_subscription<f110_msgs::msg::WpntArray>(
+        fallback_waypoints_topic_, 10,
+        [this](const f110_msgs::msg::WpntArray::SharedPtr msg) { pathCb(msg, false); });
+    }
 
     car_state_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       "/car_state/frenet/odom", 10, std::bind(&ClusterToObstacle::carStateCb, this, _1));
@@ -71,11 +94,29 @@ public:
 
 private:
   // ---------- Waypoints / Frenet setup ----------
-  void pathCb(const f110_msgs::msg::WpntArray::SharedPtr msg) {
+  // is_primary=false 는 폴백 토픽(/global_waypoints, 편집 맵 경계)에서 온 것이다.
+  // 원본 맵 경계를 한 번이라도 받았으면 폴백은 무시한다.
+  void pathCb(const f110_msgs::msg::WpntArray::SharedPtr msg, bool is_primary) {
+    if (!is_primary) {
+      if (got_primary_bounds_) return;
+      // 원본 경계가 올 시간을 준다. 아직 유예 중이면 폴백을 무시한다.
+      if ((now() - node_start_).seconds() < fallback_grace_period_) return;
+    }
+
     const auto& wps = msg->wpnts;
     if (wps.size() < 2) {
       RCLCPP_WARN(get_logger(), "Received too few waypoints: %zu", wps.size());
       return;
+    }
+
+    if (is_primary && !got_primary_bounds_) {
+      got_primary_bounds_ = true;
+      RCLCPP_INFO(get_logger(), "[cluster_to_obstacle] track bounds from '%s' (원본 맵 기준)",
+                  frenet_waypoints_topic_.c_str());
+    } else if (!is_primary) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000,
+                           "[cluster_to_obstacle] '%s' 미수신 -> 폴백 '%s' (편집 맵 경계) 사용 중",
+                           frenet_waypoints_topic_.c_str(), fallback_waypoints_topic_.c_str());
     }
 
     std::vector<double> xs; xs.reserve(wps.size());
@@ -354,13 +395,17 @@ private:
 
 private:
   // Params
-  std::string frenet_waypoints_topic_, cluster_topic_, obstacle_pub_topic_, obstacle_marker_topic_;
+  std::string frenet_waypoints_topic_, fallback_waypoints_topic_;
+  std::string cluster_topic_, obstacle_pub_topic_, obstacle_marker_topic_;
+  bool got_primary_bounds_{false};
+  double fallback_grace_period_{8.0};
+  rclcpp::Time node_start_;
   double min_obs_size_{0.05}, max_obs_size_{0.5}, max_viewing_distance_{5.0}, boundaries_inflation_{0.0};
   double min_intrusion_{0.0};
   std::string input_frame_{"livox_frame"}, map_frame_{"map"};
 
   // Pubs/Subs
-  rclcpp::Subscription<f110_msgs::msg::WpntArray>::SharedPtr wp_sub_;
+  rclcpp::Subscription<f110_msgs::msg::WpntArray>::SharedPtr wp_sub_, wp_fallback_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr car_state_sub_;
   rclcpp::Subscription<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr cluster_sub_;
   rclcpp::Publisher<f110_msgs::msg::ObstacleArray>::SharedPtr obstacles_pub_;

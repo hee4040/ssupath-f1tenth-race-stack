@@ -153,6 +153,23 @@ def SpliniOvertakingTransition(state_machine: StateMachine) -> StateType:
         # If spline is on an obstacle we trail
         if not o_free:
             return StateType.TRAILING
+
+        # ★ 2026-08-11 신설: 피할 것이 없어졌으면 레이싱라인으로 돌아간다.
+        #   아래 `not in_ot_sector and _check_gbfree` 가 원래의 유일한 GB_TRACK 복귀
+        #   경로인데, 이 저장소의 모든 맵이 ot_sectors.yaml 을 ot_flag: true 로 트랙
+        #   전체에 깔아 놓아서(lobby_0806/0807/0811 전부 확인) in_ot_sector 가 항상
+        #   True 다. 즉 그 분기는 한 번도 실행된 적이 없고, OVERTAKE 는 사실상
+        #   흡수상태(TRAILING 을 경유해야만 빠져나옴)였다.
+        #   장애물이 있을 때는 티가 안 나지만 유령이 섞이면 비용이 크다 —
+        #   obs_debug_0811_1503(186초, 장애물 0개) 실측: OVERTAKE 63.8초(전체의 34%)
+        #   중 69%(44.3초)는 장애물이 아예 없는 상태였고, 그중 30.7초는 차가 이미
+        #   레이싱라인 0.4 m 안에 있었다. 유령 하나가 회피선 주행 수 초로 증폭된다.
+        #   _check_gbfree(전방 6.9 m, |d|<0.8 이내 장애물 없음) + 레이싱라인 근접을
+        #   모두 만족할 때만 복귀하므로, 진짜 추월 중에는 발동하지 않는다
+        #   (추월 중이면 상대차가 gb_horizon 안에 있어 gb_free 가 False).
+        if state_machine._check_gbfree and state_machine._check_close_to_raceline:
+            return StateType.GB_TRACK
+
         if in_ot_sector and o_free and spline_valid:
             return StateType.OVERTAKE
         # If spline becomes unvalid while overtaking, we trail

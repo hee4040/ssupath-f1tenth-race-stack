@@ -12,7 +12,8 @@ from __future__ import annotations
 import os
 
 # 배포 기본 가중치. 학습 car_b(pow) 가 실차 배포 대상이다 (models/README.md 참조).
-DEFAULT_CKPT = "20260805/pow.pt"
+# models/ 에는 최신 런의 pow.pt / cvar.pt 두 개만 둔다 (날짜 폴더를 두지 않는다).
+DEFAULT_CKPT = "pow.pt"
 
 
 def models_roots() -> list:

@@ -144,8 +144,9 @@ lobby_0728 bag 실측 기준값 (`config/rl_controller.yaml`):
 
 | 파라미터 | 기본 | 설명 |
 |---|---|---|
-| `checkpoint` | `20260805/pow.pt` | 상대경로면 패키지 `models/` 기준. **`pow.pt` 가 실차 배포 대상**(학습 car_b) — `models/README.md` 참조 |
-| `curv_clip` | 2.0 | 곡률 관측 클립. 20260805 세대부터 ±2. 구 `models/cvar.pt` 를 쓰면 1.0 으로 되돌릴 것 |
+| `checkpoint` | `pow.pt` | 상대경로면 패키지 `models/` 기준. **`pow.pt` 가 실차 배포 대상**(학습 car_b) — `models/README.md` 참조 |
+| `curv_clip` | 2.0 | 곡률 관측 클립. 20260805 세대부터 ±2 |
+| `opp_det_box_rear` | 0.20 | 상대차 감지 박스 → 차중심 보정 [m]. 박스 미장착 상대면 0.0 |
 | `v_max` | 5.0 (launch 인자) | 행동->속도 상한 |
 | `speed_mode` | `scale` | `scale`=v_min~v_max 로 선형 매핑, `clip`=학습대로 v_min~10 매핑 후 v_max 로 절단 |
 | `opponent_enabled` | `true` | 상대차 관측 사용. perception 이 안 떠 있으면 자동으로 0(미검출) |
@@ -155,13 +156,36 @@ lobby_0728 bag 실측 기준값 (`config/rl_controller.yaml`):
 | `scan_z_min/max` | 0.02/0.30 | 높이 밴드 |
 | `device` | `cpu` | 이 젯슨의 pip torch(2.11)는 sm_87 커널이 없어 CUDA 실행이 실패한다. CPU 추론 5ms 로 충분 |
 
+### 상대차 '감지 박스' (대회 규정)
+
+대회는 각 차량 뒷부분에 옆면이 막힌 **12×12cm 감지 박스**를 지면 10~30cm 높이에
+달게 한다(상대 LiDAR 가 검출하도록). 섀시는 축고 6cm 라 그 높이 밴드 아래에 있어
+거의 안 잡히므로, **LiDAR 가 보는 것은 사실상 이 박스뿐**이다.
+
+학습도 20260807 세대부터 상대차 footprint 를 원판(`opp_radius`) 대신 이 박스로
+모델링한다. 그런데 학습 관측의 `rel_x/rel_y/gap_s` 는 여전히 **차중심** 기준이다
+(`racing_env._observe_car`: 박스 중심은 `visible` 게이트와 스캔 오버레이에만 쓰인다).
+
+실차 perception 이 주는 위치는 박스 중심이므로, 그대로 넣으면 상대차가 항상 20cm
+뒤에 있는 것으로 보인다(정규화하면 0.02 — 학습 `opp_pos_noise` 0.05m 의 4배 되는
+계통 편향). 그래서 상대차 헤딩 방향으로 `opp_det_box_rear` 만큼 앞으로 되돌린다.
+헤딩은 tracking 이 주는 Frenet 속도에서 얻는다: `heading = psi(s) + atan2(vd, vs)`.
+
+**연습 주행처럼 상대차에 박스가 없으면 `opp_det_box_rear: 0.0` 으로 둘 것.**
+(그 경우 LiDAR 가 섀시/바퀴를 잡으므로 검출점이 대략 차중심이다.)
+
 ### 학습 코드가 바뀌면 같이 볼 것
 
 관측 포맷을 정하는 곳은 `dacerpp_lab/racing_env.py` 의 `_observe_car` 와
 `dacerpp_lab/env_cfg.py` 의 `RacingCfg` 딱 두 곳이다. 노드 기동 시
 `n_beams / curv_lookahead / act_hist_len` 로 계산한 차원과 체크포인트의 `obs_dim` 이
 다르면 죽으므로 **차원이 바뀌는 변경은 자동으로 잡힌다.** 위험한 건 차원은 그대로인데
-정규화/클립만 바뀌는 경우다 (20260805 의 곡률 ±1 → ±2 가 정확히 그 경우였다).
+정규화/클립/기준점만 바뀌는 경우다 — 지금까지 곡률 ±1→±2(20260805)와
+상대차 기준점 차중심→감지박스(20260807) 둘이 그랬다.
+
+물리(마찰·슬립 벌점) 변경은 주행 코드엔 영향이 없지만, 폐루프 검증기
+`offline_sim.py` 의 `MU_NOM` 은 학습값과 맞춰야 검증이 의미가 있다
+(0.75 → 0.90 → **1.05**, 학습 `mu_range` 0.85~1.25).
 
 ## ★ 새 맵은 주행 전에 반드시 시뮬로 돌려볼 것
 
@@ -172,6 +196,14 @@ ros2 run rl_controller check_rl_setup.py --map stack_master/maps/<맵이름> --r
 학습 타이어 모델을 이식한 폐루프 시뮬(`rl_controller/offline_sim.py`)로 여러 시작점 ×
 여러 v_max 를 돌려 완주율과 **실패 지점 s** 를 보고한다. lobby_0730 사고를 실차와
 같은 지점(s≈3.4m), 같은 속도 문턱(v_max 2.0 통과 / 2.5 실패)으로 재현한다.
+
+**낮은 마찰에서도 같이 돌려볼 것.** 학습이 μ 를 0.75 → 1.05(밴드 0.85~1.25)로 크게
+올려 놨는데, 실제 우레탄 도막 그립이 그보다 낮으면 정책이 그립을 과대평가해
+언더스티어(바깥벽 밀착)가 재발할 수 있다 — 학습 코드 주석이 직접 경고하는 부분이다.
+
+```bash
+ros2 run rl_controller check_rl_setup.py --map <맵> --rollout --mu 0.65
+```
 
 > **곡률/폭 임계값으로 맵을 걸러내려던 시도는 실패했다.** 학습에 쓰인 절차 생성 트랙
 > 60종을 실제로 재생성해 비교하면 `|κ|max` 중앙 1.44 / 최대 1.84, 급코너 방향 반전
