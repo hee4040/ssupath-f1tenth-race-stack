@@ -17,33 +17,37 @@
   * 반대로 편집이 트랙을 넓힌 구간에서는 진짜 벽 점군이 트랙 안으로 들어와
     유령 장애물이 된다.
 
-주행 경로(레이스라인/회피 corridor)는 편집 맵 기준이 맞다. 하지만 "저게 장애물인가
-벽인가" 판정만큼은 실제 벽 = 원본 맵(`<map>_origin.png`) 을 봐야 한다.
-이 모듈이 그 차이만큼만 경계를 보정해 준다.
+역할 분담이 이렇다:
+  * 편집 맵 (`<map>.png`)        -> 레이스라인/회피 corridor 를 원하는 모양으로 뽑는 용도.
+                                    global_waypoints.json 이 만들어지면 역할 끝.
+  * 원본 맵 (`<map>_origin.png`) -> "저게 장애물인가 벽인가" 판정 기준. 실제 벽이어야 한다.
 
-방식 — 절대값이 아니라 '차이'를 쓴다
-------------------------------------
-각 웨이포인트에서 좌/우 법선 방향으로 편집 맵과 원본 맵 각각에 레이캐스팅을 해서
-벽까지의 거리를 구하고, **그 차이만** 저장된 d_left/d_right 에 더한다.
+방식 — 원본 맵 벽까지의 '최단거리' 절대값
+----------------------------------------
+각 웨이포인트에서 좌/우 반평면 안의 가장 가까운 점유 셀까지의 거리를 재서
+d_left/d_right 를 그대로 대체한다(_nearest_bound).
 
-    d_left_new = d_left_json + (ray_origin_left - ray_edited_left)
+이건 새 로직이 아니라 **스택이 원래 쓰던 방식**이다. global_planner 는
+`extract_track_bounds`(watershed) 가 실패하면 `cv2.distanceTransform` 으로 폴백하고,
+`dist_to_bounds()` 는 `np.amin(...)` 으로 최단거리를 쓴다. lobby_0812 는 편집본·원본
+모두 watershed 가 실패해서 애초에 거리변환 경로로 갔다. 검증: 편집본을 이 방식으로
+재면 json 의 d_left/d_right 와 4.4~4.7 cm 차이로 일치한다(그 차이가 safety_width 여유).
 
-두 맵이 같은 구간에서는 차이가 정확히 0 이라 경계가 그대로 유지된다. 즉
-`boundaries_inflation`, `min_intrusion` 같은 기존 튜닝값이 의미를 그대로 지킨다.
-경계를 처음부터 다시 뽑으면(레이캐스팅 절대값으로 대체) json 의 safety-width 여유가
-사라져서 튜닝을 전부 다시 해야 한다.
+★ 레이캐스팅(법선 방향으로 쏘기)을 쓰면 안 된다 — 2026-08-11 에 그렇게 만들었다가
+  2026-08-12 에 걷어냈다. 벽을 비스듬히 만나는 구간에서 실제 벽보다 최대 +89 cm 까지
+  튀고(lobby_0812 실측, 우측 p90 +43 cm), 그 구간은 벽이 통째로 트랙 안으로 들어온다.
+  그걸 피하려고 '두 맵 레이캐스팅의 차이만 더하기 + widen_only' 라는 우회로를 만들었는데,
+  그러면 편집 경계에서 델타가 0/+0.5 로 갈려 경계가 계단처럼 튀었다(0.1 m 초과 점프
+  13 군데, 최대 34 cm). 최단거리로 재면 그런 튐이 없다(점프 0 군데, json 과 동급).
 
-기본은 '넓히는 방향'만 (widen_only)
------------------------------------
-차이가 음수(원본이 더 좁음)인 경우는 거의 두 가지다.
-  1. 편집자가 원본 맵의 벽 가장자리 삐죽한 부분(1~5 셀)을 다듬은 것 — 노이즈다.
-  2. 레이스라인이 벽에 바짝 붙은 구간에서 레이가 벽을 스치듯 지나가(grazing) 두 맵의
-     한두 셀 차이가 거리 수십 cm 차이로 증폭된 것.
-lobby_0811 실측에서 음수 델타는 전부 이 둘이었고(편집이 흰색으로 바꾼 픽셀은 총 43개,
-가장 큰 덩어리도 27셀), 최대 -0.21 m 까지 튀었다. 그대로 반영하면 그 구간 탐지 폭이
-0.07 m 로 무너져서 오히려 장애물을 더 놓친다.
-그래서 기본값은 `widen_only=True` — 편집 맵 경계보다 좁아지지 않는다. 최소한
-지금까지의 동작보다 나빠지지는 않는다는 보장이 된다.
+주의 — 경계가 넓어지므로 min_intrusion 을 같이 올려야 한다
+--------------------------------------------------------
+절대값을 쓰면 json 에 있던 safety_width 여유가 사라져 경계가 진짜 벽까지 나간다
+(lobby_0812: 좌 +4.6 cm, 우 +14.9 cm). 경계를 δ 넓히는 것은 min_intrusion 을 δ
+내리는 것과 같으므로, 그만큼 문턱을 올리지 않으면 벽 유령이 늘어난다.
+2026-08-12 기준 cluster_to_obstacle 의 min_intrusion 은 0.37 -> 0.42 로 같이 올렸다.
+얻는 것은 평균 성능이 아니라 **일관성**이다 — 50 cm 상자가 벽에서 떨어져야 하는 거리가
+지점에 따라 16~39 cm 로 흔들리던 것이 전 구간 17 cm 로 균일해진다.
 
 좌표 규약은 global_planner_logic.py 와 동일하다.
   * 이미지를 세로로 뒤집어(cv2.flip(img, 0)) 행 인덱스 = 아래에서부터의 y 셀
@@ -91,49 +95,58 @@ def _load_grid(png_path: str) -> np.ndarray:
     return cv2.flip(img, 0) > _FREE_THRESH
 
 
-def _raycast(free: np.ndarray, xs, ys, nxs, nys, res, ox, oy, max_ray):
-    """(xs, ys) 에서 (nxs, nys) 방향으로 첫 점유 셀까지의 거리를 벡터화해서 구한다.
+def _nearest_bound(free: np.ndarray, xs, ys, nxs, nys, res, ox, oy, max_ray):
+    """각 웨이포인트에서 좌/우 **최단거리** 로 원본 맵 벽까지의 거리를 구한다.
 
-    격자 밖은 점유로 본다. 끝까지 자유공간이면 max_ray 를 돌려준다.
+    좌/우 반평면 안에서 가장 가까운 점유 셀까지의 거리를 쓴다.
+    global_planner 의 dist_to_bounds() 와 같은 방식이라(np.amin) json 의
+    d_left/d_right 와 측정 기준이 일치한다. 레이캐스팅을 쓰면 안 되는 이유는
+    모듈 docstring 참조.
+
+    좌/우 구분은 법선 방향 투영 부호로 한다(좌측 법선 = (-sin psi, cos psi)).
+    max_ray 안에 점유 셀이 없으면 max_ray 를 돌려준다.
     """
-    height, width = free.shape
-    step = res * 0.25
-    n_steps = max(1, int(np.ceil(max_ray / step)))
-    dists = np.arange(1, n_steps + 1) * step            # (N,)
+    from scipy.spatial import cKDTree
 
-    px = xs[:, None] + nxs[:, None] * dists[None, :]    # (M, N)
-    py = ys[:, None] + nys[:, None] * dists[None, :]
+    rows_occ, cols_occ = np.where(~free)
+    if len(rows_occ) == 0:
+        return np.full(len(xs), float(max_ray)), np.full(len(xs), float(max_ray))
 
-    cols = np.rint((px - ox) / res).astype(np.int64)
-    rows = np.rint((py - oy) / res).astype(np.int64)
-    inside = (rows >= 0) & (rows < height) & (cols >= 0) & (cols < width)
+    wx = cols_occ * res + ox
+    wy = rows_occ * res + oy
+    tree = cKDTree(np.column_stack([wx, wy]))
 
-    free_at = np.zeros(cols.shape, dtype=bool)
-    free_at[inside] = free[rows[inside], cols[inside]]
-    occupied = ~free_at                                  # 격자 밖 = 점유
-
-    hit = occupied.any(axis=1)
-    first = np.argmax(occupied, axis=1)                  # hit 인 행에서만 유효
-    # dists[k] = (k+1)*step 이므로, 첫 점유가 k 면 마지막 자유 샘플은 k*step.
-    out = np.where(hit, first * step, float(max_ray))
-    return out
+    left = np.full(len(xs), float(max_ray))
+    right = np.full(len(xs), float(max_ray))
+    for i in range(len(xs)):
+        idx = tree.query_ball_point([xs[i], ys[i]], max_ray)
+        if not idx:
+            continue
+        idx = np.asarray(idx)
+        rx = wx[idx] - xs[i]
+        ry = wy[idx] - ys[i]
+        side = rx * nxs[i] + ry * nys[i]      # >0 이면 좌측
+        dist = np.hypot(rx, ry)
+        if np.any(side > 0):
+            left[i] = dist[side > 0].min()
+        if np.any(side < 0):
+            right[i] = dist[side < 0].min()
+    return left, right
 
 
 def compute_origin_bounds(map_dir, glb_wpnts, logger=None,
-                          max_delta=0.6, max_ray=4.0, min_bound=0.05,
-                          widen_only=True):
-    """편집 맵 대비 원본 맵의 벽 위치 차이만큼 d_left/d_right 를 보정한 WpntArray 반환.
+                          max_ray=4.0, min_bound=0.05):
+    """원본 맵의 진짜 벽 위치로 d_left/d_right 를 대체한 WpntArray 반환.
+
+    x/y/psi/s/속도는 건드리지 않는다. 프레네 기준선이 그대로이므로 하류의 s/d 좌표도
+    전혀 바뀌지 않는다 — 바뀌는 건 "어디까지가 트랙인가" 하나뿐이다.
 
     Args:
         map_dir:    맵 디렉토리 (`<base>.png`, `<base>_origin.png`, `<base>.yaml` 이 있는 곳)
         glb_wpnts:  편집 맵 기준 글로벌 웨이포인트 (f110_msgs/WpntArray)
         logger:     rclpy logger (선택)
-        max_delta:  한 웨이포인트에서 허용할 경계 보정량의 상한 [m].
-                    원본 맵의 구멍으로 레이가 빠져나가 경계가 폭주하는 것을 막는다.
-        max_ray:    레이캐스팅 최대 거리 [m]
-        min_bound:  보정 후 경계 하한 [m]
-        widen_only: True 면 편집 맵 경계보다 좁히지 않는다(권장, 이유는 모듈 docstring).
-                    False 로 두면 원본이 더 좁은 구간도 그대로 반영한다.
+        max_ray:    벽을 찾는 최대 반경 [m]. 이 안에 점유 셀이 없으면 max_ray 를 쓴다.
+        min_bound:  경계 하한 [m]
 
     Returns:
         (보정된 WpntArray, 사람이 읽을 요약 문자열).
@@ -178,15 +191,6 @@ def compute_origin_bounds(map_dir, glb_wpnts, logger=None,
     psis = np.array([w.psi_rad for w in wpnts])
     nxs, nys = -np.sin(psis), np.cos(psis)               # 좌측 법선
 
-    edit_l = _raycast(free_edit, xs, ys, nxs, nys, res, ox, oy, max_ray)
-    edit_r = _raycast(free_edit, xs, ys, -nxs, -nys, res, ox, oy, max_ray)
-    orig_l = _raycast(free_orig, xs, ys, nxs, nys, res, ox, oy, max_ray)
-    orig_r = _raycast(free_orig, xs, ys, -nxs, -nys, res, ox, oy, max_ray)
-
-    lo = 0.0 if widen_only else -max_delta
-    delta_l = np.clip(orig_l - edit_l, lo, max_delta)
-    delta_r = np.clip(orig_r - edit_r, lo, max_delta)
-
     # 원본 맵에서 레이스라인 자체가 벽 안이면(편집이 트랙을 뚫어 만든 구간 등)
     # 좌우 거리가 0 으로 무너진다. 그런 점은 보정하지 않고 편집 맵 값을 유지한다.
     cols = np.rint((xs - ox) / res).astype(np.int64)
@@ -195,19 +199,29 @@ def compute_origin_bounds(map_dir, glb_wpnts, logger=None,
     inside = (rows >= 0) & (rows < height) & (cols >= 0) & (cols < width)
     on_free = np.zeros(len(wpnts), dtype=bool)
     on_free[inside] = free_orig[rows[inside], cols[inside]]
-    delta_l[~on_free] = 0.0
-    delta_r[~on_free] = 0.0
+
+    # 원본 맵의 진짜 벽까지 '최단거리' 를 그대로 경계로 쓴다.
+    # 편집 맵은 레이스라인을 원하는 모양으로 뽑기 위한 것이고, 거기서 역할이 끝난다.
+    # 실주행 중 "저게 장애물인가 벽인가" 판정은 진짜 벽을 봐야 하므로 원본만 본다.
+    orig_l, orig_r = _nearest_bound(free_orig, xs, ys, nxs, nys, res, ox, oy, max_ray)
+    json_l = np.array([w.d_left for w in wpnts])
+    json_r = np.array([w.d_right for w in wpnts])
+    # 원본 맵에서 레이스라인 자체가 벽 안인 지점은 거리가 0 으로 무너지므로 손대지 않는다.
+    new_l = np.where(on_free, orig_l, json_l)
+    new_r = np.where(on_free, orig_r, json_r)
+    delta_l = new_l - json_l
+    delta_r = new_r - json_r
 
     out = copy.deepcopy(glb_wpnts)
     for i, w in enumerate(out.wpnts):
-        w.d_left = max(min_bound, w.d_left + float(delta_l[i]))
-        w.d_right = max(min_bound, w.d_right + float(delta_r[i]))
+        w.d_left = max(min_bound, float(new_l[i]))
+        w.d_right = max(min_bound, float(new_r[i]))
 
     n_changed = int(np.count_nonzero((np.abs(delta_l) > 1e-6) | (np.abs(delta_r) > 1e-6)))
     summary = ('origin map %s: %d/%d wpnts 경계 보정 '
-               '(left %+.3f~%+.3f m, right %+.3f~%+.3f m, widen_only=%s, 벽 안 wpnt %d)'
+               '(left %+.3f~%+.3f m, right %+.3f~%+.3f m, 벽 안 wpnt %d)'
                % (os.path.basename(origin_png), n_changed, len(wpnts),
                   delta_l.min(), delta_l.max(), delta_r.min(), delta_r.max(),
-                  widen_only, int(np.count_nonzero(~on_free))))
+                  int(np.count_nonzero(~on_free))))
     _log(summary)
     return out, summary

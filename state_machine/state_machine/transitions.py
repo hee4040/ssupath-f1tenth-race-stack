@@ -154,21 +154,32 @@ def SpliniOvertakingTransition(state_machine: StateMachine) -> StateType:
         if not o_free:
             return StateType.TRAILING
 
-        # ★ 2026-08-11 신설: 피할 것이 없어졌으면 레이싱라인으로 돌아간다.
-        #   아래 `not in_ot_sector and _check_gbfree` 가 원래의 유일한 GB_TRACK 복귀
-        #   경로인데, 이 저장소의 모든 맵이 ot_sectors.yaml 을 ot_flag: true 로 트랙
-        #   전체에 깔아 놓아서(lobby_0806/0807/0811 전부 확인) in_ot_sector 가 항상
-        #   True 다. 즉 그 분기는 한 번도 실행된 적이 없고, OVERTAKE 는 사실상
-        #   흡수상태(TRAILING 을 경유해야만 빠져나옴)였다.
-        #   장애물이 있을 때는 티가 안 나지만 유령이 섞이면 비용이 크다 —
-        #   obs_debug_0811_1503(186초, 장애물 0개) 실측: OVERTAKE 63.8초(전체의 34%)
-        #   중 69%(44.3초)는 장애물이 아예 없는 상태였고, 그중 30.7초는 차가 이미
-        #   레이싱라인 0.4 m 안에 있었다. 유령 하나가 회피선 주행 수 초로 증폭된다.
-        #   _check_gbfree(전방 6.9 m, |d|<0.8 이내 장애물 없음) + 레이싱라인 근접을
-        #   모두 만족할 때만 복귀하므로, 진짜 추월 중에는 발동하지 않는다
-        #   (추월 중이면 상대차가 gb_horizon 안에 있어 gb_free 가 False).
-        if state_machine._check_gbfree and state_machine._check_close_to_raceline:
-            return StateType.GB_TRACK
+        # ★ 2026-08-11: 여기에 `gb_free and close_to_raceline -> GB_TRACK` 복귀 분기를
+        #   넣었다가 **실차에서 역효과라 철회**했다. 같은 길 다시 가지 말 것.
+        #
+        #   의도는 맞았다: 이 저장소의 모든 맵이 ot_sectors.yaml 을 ot_flag: true 로
+        #   트랙 전체에 깔아 놓아서(lobby_0806/0807/0811) in_ot_sector 가 항상 True 이고,
+        #   그래서 아래 `not in_ot_sector and _check_gbfree` 복귀 경로는 한 번도 실행된
+        #   적이 없다. OVERTAKE 는 사실상 흡수상태(TRAILING 경유로만 탈출)다.
+        #
+        #   문제는 종료 신호로 _check_gbfree 를 쓴 것이다. 이 스택의 탐지는 간헐적이라
+        #   (원거리 클러스터 연속성 23~28%) "전방에 장애물 없음"이 수시로 거짓으로 뜬다.
+        #   obs_debug_0811_1726(327초) 실측 — 이 분기가 26회 발동했는데 그중 10회(38%)는
+        #   복귀 직후 3초 안에 장애물이 다시 전방 6.9 m 에 나타났다. 재출현까지 중앙 0.25초,
+        #   최소 0.05초. 9회는 0.5초 이내 = 탐지가 한두 프레임 끊긴 사이에 복귀한 것이다.
+        #   복귀 시점 차량 횡위치는 중앙 0.33 m 로 회피 기동 한복판이었다.
+        #   즉 회피선을 타다가 장애물 앞에서 레이싱라인으로 되돌아갔다가 다시 급제동한다.
+        #
+        #   구제 시도도 전부 실패했다(obs_debug_0811_1726 오프라인 시뮬레이션):
+        #     gb_free 연속 유지 디바운스 0.5/0.75/1.0/1.5초 : 조기복귀 38% -> 23% 가 한계
+        #     + 스플라인 TTL 만료 조건 / 스플라인 끝 통과 조건 : 37회 중 1회만 발동(무의미)
+        #   탐지 끊김이 초 단위라 '앞이 비었다'는 신호 자체를 종료조건으로 쓸 수 없다.
+        #
+        #   ★ 제대로 고치려면 ot_sectors.yaml 에서 실제 추월 구간에만 ot_flag: true 를
+        #     주면 된다. 그러면 아래 원래 분기(`not in_ot_sector and gb_free`)가 의도대로
+        #     동작한다 — 그건 차의 s 위치로만 판정하므로 탐지 끊김에 영향받지 않는다.
+        #     유령 때문에 OVERTAKE 가 길어지는 문제는 상태머신이 아니라 퍼셉션 쪽
+        #     (cluster_to_obstacle 의 min_intrusion) 에서 잡는 게 맞다.
 
         if in_ot_sector and o_free and spline_valid:
             return StateType.OVERTAKE

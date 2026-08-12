@@ -34,7 +34,16 @@ public:
     tf_listener_(tf_buffer_) {
 
     // ---------- Parameters ----------
-    this->declare_parameter<double>("boundaries_inflation", 0.1);
+    // ★ 2026-08-12: boundaries_inflation 을 없애고 min_intrusion 하나로 합쳤다.
+    //   두 값은 이 필터 안에서 수학적으로 완전히 동일했다 —
+    //     예전: 경계를 infl 만큼 안으로 줄이고(d_left - infl), 거기서 다시 min_intrusion 을 뺌
+    //     즉 실제 문턱은 언제나 (infl + min_intrusion) 하나였고, 따로 둘 이유가 없었다.
+    //   게다가 마커(/perception/detect_bound)는 infl 만 반영해서 그렸기 때문에,
+    //   rviz 의 빨간 점이 '탐지 시작선'이 아니라 거기서 min_intrusion 만큼 더 들어가야
+    //   하는 선이었다. 보이는 것과 실제 판정이 30 cm 어긋나 있었다는 뜻이다.
+    //   이제 마커도 min_intrusion 을 반영해 그리므로 빨간 점 = 진짜 문턱선이다.
+    //   합친 값 0.37 = 예전 boundaries_inflation 0.07 + min_intrusion 0.30 이라
+    //   탐지 동작은 완전히 동일하다(마커 위치만 안쪽으로 30 cm 이동).
     // 트랙 경계(d_left/d_right)를 어디서 받을지.
     // 기본값은 원본 맵(<map>_origin.png) 기준으로 보정된 경계다. 편집 맵은 레이스라인이
     // 새지 않도록 알코브를 메워 놓기 때문에 그 구간 경계가 실제 벽보다 안쪽이고,
@@ -59,8 +68,9 @@ public:
     min_obs_size_           = declare_parameter<double>("min_obs_size", 0.05);
     max_obs_size_           = declare_parameter<double>("max_obs_size", 0.5);
     max_viewing_distance_   = declare_parameter<double>("max_viewing_distance", 5.0); //최대 장애물 탐지거리, 5m
-    min_intrusion_          = declare_parameter<double>("min_intrusion", 0.0); // 장애물이 트랙 안쪽을 물어야 하는 최소 깊이 [m]
-    boundaries_inflation_   = this->get_parameter("boundaries_inflation").as_double();
+    // 장애물의 '안쪽 끝'이 트랙 경계(d_left/d_right)보다 이만큼 안으로 들어와야 인정 [m].
+    // 예전 boundaries_inflation 의 역할까지 흡수한 단일 문턱이다.
+    min_intrusion_          = declare_parameter<double>("min_intrusion", 0.0);
 
 
     input_frame_            = declare_parameter<std::string>("input_frame", "livox_frame");
@@ -130,8 +140,10 @@ private:
     for (const auto &w : wps) {
       xs.push_back(w.x_m); ys.push_back(w.y_m); psis.push_back(w.psi_rad);
       s_array_.push_back(w.s_m);
-      d_right_array_.push_back(w.d_right - boundaries_inflation_);
-      d_left_array_.push_back(w.d_left  - boundaries_inflation_);
+      // 문턱을 여기서 한 번에 반영해 둔다. 이 배열이 곧 '탐지 시작선'이고,
+      // 아래 마커도 laserPointOnTrack 도 같은 값을 쓴다(보이는 것 = 판정하는 것).
+      d_right_array_.push_back(w.d_right - min_intrusion_);
+      d_left_array_.push_back(w.d_left  - min_intrusion_);
     }
 
     try {
@@ -141,12 +153,18 @@ private:
       return;
     }
 
-    // smallest/biggest d 계산
+    // ★ 조기 판정용 전역 최소/최대는 '문턱 적용 전' 원래 경계로 구한다.
+    //   d_*_array_ 에는 min_intrusion_ 이 이미 빠져 있는데, 그걸 그대로 쓰면
+    //   아래 laserPointOnTrack 의 "트랙 최협부 안쪽이면 무조건 통과" 예외까지
+    //   min_intrusion_ 만큼 좁아진다. 그 예외는 레이싱라인 정중앙(=차가 실제로
+    //   지나가는 자리)에 놓인 작은 장애물을 살리는 안전장치라 유지해야 한다.
+    //   2026-08-12 병합 때 이걸 놓쳐서, 백 재생 A/B 로 obs_debug_0811_1726 의
+    //   |d|<0.10 짜리 클러스터 148개가 통째로 사라지는 걸 확인하고 되돌렸다.
     smallest_d_ = std::numeric_limits<double>::infinity();
     biggest_d_  = 0.0;
-    for (size_t i=0; i<d_right_array_.size(); ++i) {
-      smallest_d_ = std::min(smallest_d_, std::min(d_right_array_[i], d_left_array_[i]));
-      biggest_d_  = std::max(biggest_d_,  std::max(d_right_array_[i], d_left_array_[i]));
+    for (const auto &w : wps) {
+      smallest_d_ = std::min(smallest_d_, std::min(w.d_right, w.d_left));
+      biggest_d_  = std::max(biggest_d_,  std::max(w.d_right, w.d_left));
     }
 
     track_length_ = wps.back().s_m;
@@ -155,13 +173,13 @@ private:
     std::vector<geometry_msgs::msg::Point> boundary_pts;
     boundary_pts.reserve(2 * wps.size());
     for (const auto &w : wps) {
-      // 오른쪽 경계점 (d: -d_right + infl)
-      auto pR = getCartesianChecked(w.s_m, -(w.d_right - boundaries_inflation_));
+      // 오른쪽 문턱선 (d: -(d_right - min_intrusion))
+      auto pR = getCartesianChecked(w.s_m, -(w.d_right - min_intrusion_));
       geometry_msgs::msg::Point pr_msg; pr_msg.x = pR.first; pr_msg.y = pR.second; pr_msg.z = 0.0;
       boundary_pts.push_back(pr_msg);
 
-      // 왼쪽 경계점 (d: +d_left - infl)
-      auto pL = getCartesianChecked(w.s_m,  (w.d_left  - boundaries_inflation_));
+      // 왼쪽 문턱선 (d: +(d_left - min_intrusion))
+      auto pL = getCartesianChecked(w.s_m,  (w.d_left  - min_intrusion_));
       geometry_msgs::msg::Point pl_msg; pl_msg.x = pL.first; pl_msg.y = pL.second; pl_msg.z = 0.0;
       boundary_pts.push_back(pl_msg);
     }
@@ -364,8 +382,10 @@ private:
     const double d_hi = d + half;   // 장애물 왼쪽 끝
 
     if (wrap_s(s - car_s) > max_viewing_distance_) return false;
-    if (std::fabs(d) - half >= biggest_d_) return false;  // 가까운 쪽 끝 기준 조기 기각
-    if (std::fabs(d) <= smallest_d_) return true;         // 중심이 안이면 무조건 겹침
+    // 아래 둘은 '문턱 적용 전' 전역 경계 기준이다(pathCb 주석 참조).
+    if (std::fabs(d) - half >= biggest_d_) return false;  // 트랙 최광부 밖 -> 조기 기각
+    if (std::fabs(d) <= smallest_d_) return true;         // 트랙 최협부 안 -> 무조건 통과
+                                                          //   (레이싱라인 정중앙 장애물 보호)
 
     // s 구간 인덱스 (bisect_left)
     size_t idx = 0;
@@ -374,11 +394,12 @@ private:
     else idx = static_cast<size_t>(std::distance(s_array_.begin(), it) - 1);
     if (idx >= d_right_array_.size()) idx = d_right_array_.size() - 1;
 
-    // 트랙 내부는 d in (-d_right, +d_left). 장애물이 트랙 안쪽을 min_intrusion_ 이상
-    // 물고 있어야 통과시킨다. 0.0 이면 "스치기만 해도 통과"(기본), 키우면 경계 바깥에
-    // 아슬아슬하게 걸치는 벽 점군을 다시 걸러낸다.
-    if (d_hi <= -d_right_array_[idx] + min_intrusion_) return false;
-    if (d_lo >=  d_left_array_[idx]  - min_intrusion_) return false;
+    // d_*_array_ 에는 min_intrusion_ 이 이미 반영돼 있다(= 문턱선, 마커와 동일한 값).
+    // 장애물의 '안쪽 끝'이 그 선을 넘어야 통과한다.
+    //   왼쪽 끝  d_hi 가 오른쪽 문턱선보다 바깥이면 기각
+    //   오른쪽 끝 d_lo 가 왼쪽 문턱선보다 바깥이면 기각
+    if (d_hi <= -d_right_array_[idx]) return false;
+    if (d_lo >=  d_left_array_[idx])  return false;
     return true;
   }
 
@@ -400,8 +421,8 @@ private:
   bool got_primary_bounds_{false};
   double fallback_grace_period_{8.0};
   rclcpp::Time node_start_;
-  double min_obs_size_{0.05}, max_obs_size_{0.5}, max_viewing_distance_{5.0}, boundaries_inflation_{0.0};
-  double min_intrusion_{0.0};
+  double min_obs_size_{0.05}, max_obs_size_{0.5}, max_viewing_distance_{5.0};
+  double min_intrusion_{0.0};   // 단일 문턱 (예전 boundaries_inflation + min_intrusion)
   std::string input_frame_{"livox_frame"}, map_frame_{"map"};
 
   // Pubs/Subs

@@ -78,5 +78,5 @@ graph_planner:
     #   상한 근거: 트랙 폭 ~1.2 m - 장애물 0.3 - 차 0.28 = 양쪽이 나눠 쓸 0.62 m.
     safety_margin_hi: 0.25   # [m] 고속에서 쓸 값
     sm_v_lo: 2.0             # [m/s] 이 속도 이하는 safety_margin 그대로 (저속 거동 보존)
-    sm_v_hi: 4.0            # [m/s] 이 속도 이상은 safety_margin_hi 그대로
+    sm_v_hi: 5.0            # [m/s] 이 속도 이상은 safety_margin_hi 그대로
     #   실제 회피는 2~4 m/s 에서 주로 일어나므로 3.5 로 낮추는 것도 고려할 것
