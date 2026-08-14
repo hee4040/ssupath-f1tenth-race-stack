@@ -93,7 +93,7 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
   }
 
   // create odom publisher
-  odom_pub_ = create_publisher<Odometry>("odom", 10);
+  odom_pub_ = create_publisher<Odometry>("odom", 1);
 
   // create tf broadcaster
   if (publish_tf_) {
@@ -102,11 +102,11 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
 
   // subscribe to vesc state and. optionally, servo command
   vesc_state_sub_ = create_subscription<VescStateStamped>(
-    "sensors/core", 10, std::bind(&VescToOdom::vescStateCallback, this, _1));
+    "sensors/core", 1, std::bind(&VescToOdom::vescStateCallback, this, _1));
 
   if (use_servo_cmd_) {
     servo_sub_ = create_subscription<Float64>(
-      "sensors/servo_position_command", 10, std::bind(&VescToOdom::servoCmdCallback, this, _1));
+      "sensors/servo_position_command", 1, std::bind(&VescToOdom::servoCmdCallback, this, _1));
   }
 
   if (use_imu_angular_velocity_) {
@@ -221,7 +221,7 @@ void VescToOdom::vescStateCallback(const VescStateStamped::SharedPtr state)
     TransformStamped tf;
     tf.header.frame_id = odom_frame_;
     tf.child_frame_id = base_frame_;
-    tf.header.stamp = now();
+    tf.header.stamp = state->header.stamp;
     tf.transform.translation.x = x_;
     tf.transform.translation.y = y_;
     tf.transform.translation.z = 0.0;

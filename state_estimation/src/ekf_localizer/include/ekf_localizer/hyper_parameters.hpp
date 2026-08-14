@@ -25,6 +25,7 @@ class HyperParameters
 public:
   explicit HyperParameters(rclcpp::Node * node)
   : show_debug_info(node->declare_parameter("show_debug_info", false)),
+    loc_debug_3d(node->declare_parameter("3d_loc_debug", false)),
     ekf_rate(node->declare_parameter("predict_frequency", 50.0)),
     ekf_dt(1.0 / std::max(ekf_rate, 0.1)),
     tf_rate_(node->declare_parameter("tf_rate", 10.0)),
@@ -49,11 +50,19 @@ public:
     twist_no_update_count_threshold_error(
       node->declare_parameter("twist_no_update_count_threshold_error", 250)),
     threshold_observable_velocity_mps(
-      node->declare_parameter("threshold_observable_velocity_mps", 0.5))
+      node->declare_parameter("threshold_observable_velocity_mps", 0.5)),
+    enable_sensor_delay_log(node->declare_parameter("enable_sensor_delay_log", true)),
+    sensor_delay_csv_dir(node->declare_parameter(
+      "sensor_delay_csv_dir", std::string("/home/misys/forza_ws/race_stack/plusresult"))),
+    sensor_delay_csv_path(node->declare_parameter("sensor_delay_csv_path", std::string(""))),
+    sensor_delay_log_throttle_sec(node->declare_parameter("sensor_delay_log_throttle_sec", 1.0)),
+    sensor_delay_imu_vesc_topic(node->declare_parameter(
+      "sensor_delay_imu_vesc_topic", std::string("/timestamp_relay_3d/imu_vesc_delay")))
   {
   }
 
   const bool show_debug_info;
+  const bool loc_debug_3d;
   const double ekf_rate;
   const double ekf_dt;
   const double tf_rate_;
@@ -74,6 +83,11 @@ public:
   const size_t twist_no_update_count_threshold_warn;
   const size_t twist_no_update_count_threshold_error;
   const double threshold_observable_velocity_mps;
+  const bool enable_sensor_delay_log;
+  const std::string sensor_delay_csv_dir;
+  const std::string sensor_delay_csv_path;
+  const double sensor_delay_log_throttle_sec;
+  const std::string sensor_delay_imu_vesc_topic;
 };
 
 #endif  // EKF_LOCALIZER__HYPER_PARAMETERS_HPP_

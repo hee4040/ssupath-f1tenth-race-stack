@@ -89,6 +89,7 @@ class Lddc final {
   uint8_t GetTransferFormat(void) { return transfer_format_; }
   uint8_t IsMultiTopic(void) { return use_multi_topic_; }
   void SetRosNode(livox_ros::DriverNode *node) { cur_node_ = node; }
+  void SetLocDebug3d(bool enable) { loc_debug_3d_ = enable; }
 
   // void SetRosPub(ros::Publisher *pub) { global_pub_ = pub; };  // NOT USED
   void SetPublishFrq(uint32_t frq) { publish_frq_ = frq; }
@@ -104,7 +105,9 @@ class Lddc final {
   void PublishCustomPointcloud(LidarDataQueue *queue, uint8_t index);
   void PublishPclMsg(LidarDataQueue *queue, uint8_t index);
 
-  void PublishImuData(LidarImuDataQueue& imu_data_queue, const uint8_t index);
+  void PublishImuData(const ImuData& imu_data, const uint8_t index);
+  uint64_t MeanPacketReceiveTimeNs(const StoragePacket& pkg) const;
+  uint64_t ResolveFrameHeaderStampNs(const StoragePacket& pkg) const;
 
   void InitPointcloud2MsgHeader(PointCloud2& cloud);
   void InitPointcloud2Msg(const StoragePacket& pkg, PointCloud2& cloud, uint64_t& timestamp);
@@ -139,6 +142,10 @@ class Lddc final {
   double publish_frq_;
   uint32_t publish_period_ns_;
   std::string frame_id_;
+  bool loc_debug_3d_{false};
+  double imu_publish_frq_{50.0};
+  uint64_t imu_publish_period_ns_{0};
+  uint64_t last_imu_pub_stamp_ns_[kMaxSourceLidar]{};
 
 #ifdef BUILDING_ROS1
   bool enable_lidar_bag_;

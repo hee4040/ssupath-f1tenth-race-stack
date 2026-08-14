@@ -31,7 +31,7 @@ using sensor_msgs::msg::Imu;
 class ImuGenerator : public rclcpp::Node
 {
 public:
-  ImuGenerator() : Node("imu_generator"), imu_pub(create_publisher<Imu>("/imu", 1)) {}
+  ImuGenerator() : Node("imu_generator"), imu_pub(create_publisher<Imu>("/sensors/imu/raw", 1)) {}
   rclcpp::Publisher<Imu>::SharedPtr imu_pub;
 };
 

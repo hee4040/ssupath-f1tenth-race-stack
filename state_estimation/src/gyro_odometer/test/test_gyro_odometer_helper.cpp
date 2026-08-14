@@ -42,5 +42,8 @@ rclcpp::NodeOptions getNodeOptionsWithDefaultParams()
   // for gyro_odometer
   node_options.append_parameter_override("output_frame", "base_link");
   node_options.append_parameter_override("message_timeout_sec", 1e12);
+  node_options.append_parameter_override("imu_mux_timeout_sec", 1e12);
+  node_options.append_parameter_override("enable_imu_mux_csv", false);
+  node_options.append_parameter_override("enable_sensor_delay_log", false);
   return node_options;
 }

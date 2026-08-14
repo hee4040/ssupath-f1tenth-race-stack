@@ -172,10 +172,12 @@ typedef struct {
   uint8_t lidar_type; ////refer to LivoxLidarType
   uint32_t points_num;
   PointXyzlt* points;
+  uint64_t mean_receive_time_ns;
 } PointPacket;
 
 typedef struct {
   uint64_t base_time[kMaxSourceLidar] {};
+  uint64_t mean_receive_time_ns[kMaxSourceLidar] {};
   uint8_t lidar_num {};
   PointPacket lidar_point[kMaxSourceLidar] {};
 } PointFrame;
@@ -186,6 +188,7 @@ typedef struct {
   LidarProtoType lidar_type;
   uint32_t handle;
   uint64_t base_time;
+  uint64_t mean_receive_time_ns;
   uint32_t points_num;
   std::vector<PointXyzlt> points;
 } StoragePacket;
@@ -198,6 +201,7 @@ typedef struct {
   uint8_t data_type;
   uint8_t line_num;
   uint64_t time_stamp;
+  uint64_t receive_time_ns;
   uint64_t point_interval;
   std::vector<uint8_t> raw_data;
 } RawPacket;

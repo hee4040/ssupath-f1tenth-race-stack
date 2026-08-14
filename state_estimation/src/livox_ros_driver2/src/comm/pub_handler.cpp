@@ -108,6 +108,11 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
     is_timestamp_sync_.store(false);
   }
 
+  const uint64_t host_receive_time_ns =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+
   if (data->data_type == kLivoxLidarImuData) {
     if (self->imu_callback_) {
       RawImuPoint* imu = (RawImuPoint*) data->data;
@@ -142,6 +147,7 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
   packet.point_interval = data->time_interval * 100 / data->dot_num;  //ns
   packet.time_stamp = GetEthPacketTimestamp(data->time_type,
                                             data->timestamp, sizeof(data->timestamp));
+  packet.receive_time_ns = host_receive_time_ns;
   uint32_t length = data->length - sizeof(LivoxLidarEthernetPacket) + 1;
   packet.raw_data.insert(packet.raw_data.end(), data->data, data->data + length);
   {
@@ -186,6 +192,8 @@ void PubHandler::CheckTimer(uint32_t id) {
     lidar_point.handle = id;
     lidar_point.points_num = points_[id].size();
     lidar_point.points = points_[id].data();
+    lidar_point.mean_receive_time_ns = process_handler->GetMeanReceiveTimeNs();
+    frame_.mean_receive_time_ns[frame_.lidar_num] = lidar_point.mean_receive_time_ns;
     frame_.lidar_num++;
     
     if (frame_.lidar_num != 0) {
@@ -218,6 +226,8 @@ void PubHandler::CheckTimer(uint32_t id) {
       lidar_point.handle = handle;
       lidar_point.points_num = points_[handle].size();
       lidar_point.points = points_[handle].data();
+      lidar_point.mean_receive_time_ns = process_handler.second->GetMeanReceiveTimeNs();
+      frame_.mean_receive_time_ns[frame_.lidar_num] = lidar_point.mean_receive_time_ns;
       frame_.lidar_num++;
     }
     PublishPointCloud();
@@ -288,6 +298,17 @@ uint64_t LidarPubHandler::GetLidarBaseTime() {
 void LidarPubHandler::GetLidarPointClouds(std::vector<PointXyzlt>& points_clouds) {
   std::lock_guard<std::mutex> lock(mutex_);
   points_clouds.swap(points_clouds_);
+  if (receive_time_count_ > 0) {
+    last_mean_receive_time_ns_ = receive_time_sum_ns_ / receive_time_count_;
+  } else {
+    last_mean_receive_time_ns_ = 0;
+  }
+  receive_time_sum_ns_ = 0;
+  receive_time_count_ = 0;
+}
+
+uint64_t LidarPubHandler::GetMeanReceiveTimeNs() const {
+  return last_mean_receive_time_ns_;
 }
 
 uint64_t LidarPubHandler::GetRecentTimeStamp() {
@@ -316,6 +337,11 @@ void LidarPubHandler::PointCloudProcess(RawPacket & pkt) {
 }
 
 void LidarPubHandler::LivoxLidarPointCloudProcess(RawPacket & pkt) {
+  if (pkt.receive_time_ns != 0) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    receive_time_sum_ns_ += pkt.receive_time_ns;
+    receive_time_count_ += 1;
+  }
   switch (pkt.data_type) {
     case kLivoxLidarCartesianCoordinateHighData:
       ProcessCartesianHighPoint(pkt);

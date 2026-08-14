@@ -47,11 +47,14 @@
 
 
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <queue>
 #include <string>
 #include <vector>
+
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 class Simple1DFilter
 {
@@ -141,6 +144,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr sub_pose_with_cov_;
   //!< @brief measurement twist with covariance subscriber
   rclcpp::Subscription<geometry_msgs::msg::TwistWithCovarianceStamped>::SharedPtr sub_twist_with_cov_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_imu_vesc_delay_;
   //!< @brief time for ekf calculation callback
   rclcpp::TimerBase::SharedPtr timer_control_;
   //!< @brief last predict time
@@ -208,6 +212,25 @@ private:
   geometry_msgs::msg::TwistStamped current_ekf_twist_;  //!< @brief current estimated twist
   std::array<double, 36ul> current_pose_covariance_;
   std::array<double, 36ul> current_twist_covariance_;
+
+  rclcpp::Time last_pose_sensor_stamp_;
+  bool has_pose_sensor_stamp_;
+  rclcpp::Time last_twist_sensor_stamp_;
+  bool has_twist_sensor_stamp_;
+  double last_imu_delay_s_;
+  double last_vesc_delay_s_;
+  double last_lidar_delay_s_;
+  double last_gyro_twist_delay_s_;
+  bool has_imu_delay_;
+  bool has_vesc_delay_;
+  bool has_lidar_delay_;
+  bool has_gyro_twist_delay_;
+  rclcpp::Time last_imu_stamp_;
+  rclcpp::Time last_vesc_stamp_;
+  bool has_imu_stamp_;
+  bool has_vesc_stamp_;
+  std::ofstream sensor_delay_csv_;
+  rclcpp::Time last_sensor_delay_csv_write_;
 
   /**
    * @brief computes update & prediction of EKF for each ekf_dt_[s] time
@@ -298,6 +321,11 @@ private:
    * @brief initialize simple1DFilter
    */
   void initSimple1DFilters(const geometry_msgs::msg::PoseWithCovarianceStamped & pose);
+
+  rclcpp::Time getOutputStamp() const;
+  void callbackImuVescDelay(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  void sampleSensorDelay(const std::string & name);
+  void flushSensorDelayCsv();
 
   /**
    * @brief trigger node

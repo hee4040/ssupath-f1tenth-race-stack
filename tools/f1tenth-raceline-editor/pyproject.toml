@@ -1,0 +1,47 @@
+[project]
+name = "f1tenth-raceline-offline"
+version = "0.3.0"
+description = "ROS-free F1TENTH global raceline generator extracted from ssupath-f1tenth-race-stack"
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "casadi==3.7.2",
+    "matplotlib==3.7.5",
+    "numpy==1.23.5",
+    "opencv-python-headless==4.8.1.78",
+    "platformdirs==4.3.8",
+    "quadprog==0.1.13",
+    "pyyaml==6.0.2",
+    "scikit-image==0.21.0",
+    "scikit-learn==1.7.2",
+    "scipy==1.10.1",
+    "trajectory-planning-helpers==0.80",
+]
+
+[project.scripts]
+raceline = "f1tenth_raceline.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = [
+    "src/f1tenth_raceline/**/*.py",
+    "src/f1tenth_raceline/web/index.html",
+    "src/f1tenth_raceline/web/editor.js",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/f1tenth_raceline"]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+trajectory-planning-helpers = { git = "https://github.com/TUMFTM/trajectory_planning_helpers.git", rev = "aa950f6045680366b789dbb855db8d59d54b1db5" }
+
+[dependency-groups]
+dev = [
+    "pytest==9.0.2",
+]

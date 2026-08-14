@@ -6,6 +6,13 @@
   <arg name="sim" default="False" description="True/False if you want to run simulation" />
   <arg name="loc_algorithm" default="slam" description="'slam' / 'synpf' to switch localisation algorithm" />
   <arg name="rviz" default="false" description="차에서 rviz2 실행 (초기 포즈 화살표용, 주행 시 false 권장)" />
+  <arg name="imu_mode" default="vesc"/>
+  <arg name="imu_mux" default="$(var imu_mode)"/>
+  <arg name="weight_vesc" default="50.0"/>
+  <arg name="imu_mux_weight_vesc" default="$(var weight_vesc)"/>
+  <arg name="imu_mux_livox_bias_wz" default="0.01"/>
+  <arg name="imu_mux_timeout_sec" default="0.1"/>
+  <arg name="enable_imu_mux_csv" default="true"/>
 
   <let name="sensors_config" value="$(find-pkg-share stack_master)/config/sensors.yaml" />
   <let name="mux_config" value="$(find-pkg-share stack_master)/config/mux.yaml" />
@@ -48,6 +55,12 @@
       <arg name="map_name" value="$(var map_name)" />
       <arg name="frenet_bool" value="True" />
       <arg name="rviz" value="$(var rviz)" />
+      <arg name="imu_mux_mode" value="$(var imu_mux)"/>
+      <arg name="weight_vesc" value="$(var weight_vesc)"/>
+      <arg name="imu_mux_weight_vesc" value="$(var imu_mux_weight_vesc)"/>
+      <arg name="imu_mux_livox_bias_wz" value="$(var imu_mux_livox_bias_wz)"/>
+      <arg name="imu_mux_timeout_sec" value="$(var imu_mux_timeout_sec)"/>
+      <arg name="enable_imu_mux_csv" value="$(var enable_imu_mux_csv)"/>
   </include>
   </group>
 

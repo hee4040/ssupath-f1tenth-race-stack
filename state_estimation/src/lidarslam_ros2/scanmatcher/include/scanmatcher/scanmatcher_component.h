@@ -118,6 +118,7 @@ private:
     std::string map_path_;  //PCD 파일 경로 저장용 멤버 변수
 
     geometry_msgs::msg::PoseStamped current_pose_stamped_;
+    rclcpp::Time sensor_input_stamp_{0, 0, RCL_ROS_TIME};
     lidarslam_msgs::msg::MapArray map_array_msg_;
     nav_msgs::msg::Path path_;
     rclcpp::Publisher < geometry_msgs::msg::PoseStamped > ::SharedPtr pose_pub_;

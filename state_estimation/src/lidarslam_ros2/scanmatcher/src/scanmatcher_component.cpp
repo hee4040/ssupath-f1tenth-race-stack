@@ -326,6 +326,7 @@ void ScanMatcherComponent::initializePubSub()
     [this](const typename sensor_msgs::msg::PointCloud2::SharedPtr msg) -> void
     {
       if (initial_pose_received_) {
+        sensor_input_stamp_ = msg->header.stamp;
         sensor_msgs::msg::PointCloud2 transformed_msg;
 
 
@@ -388,7 +389,7 @@ void ScanMatcherComponent::initializePubSub()
 
 
         // 맵 로드는 생성자에서 수행됨. 로드 실패 시 매칭도 하지 않음
-        if (initial_cloud_received_) {receiveCloud(tmp_ptr, msg->header.stamp);}
+        if (initial_cloud_received_) {receiveCloud(tmp_ptr, sensor_input_stamp_);}
       }
 
     };
@@ -453,7 +454,7 @@ void ScanMatcherComponent::initializePubSub()
   //   rclcpp::QoS(10));
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
     "ndt_pose",
-    rclcpp::QoS(10));
+    rclcpp::QoS(1));
   // 맵은 한 번만 발행되므로 늦게 켠 rviz도 받을 수 있게 latched로.
   // intra-process는 transient_local을 지원하지 않으므로 이 퍼블리셔만 제외
   rclcpp::PublisherOptions map_pub_options;
@@ -599,7 +600,7 @@ void ScanMatcherComponent::publishMapAndPose(
 
   if(publish_tf_){
     geometry_msgs::msg::TransformStamped transform_stamped;
-    transform_stamped.header.stamp = stamp;
+    transform_stamped.header.stamp = sensor_input_stamp_.nanoseconds() != 0 ? sensor_input_stamp_ : stamp;
     transform_stamped.header.frame_id = global_frame_id_;
 
     bool tf_sent = false;
@@ -633,7 +634,8 @@ void ScanMatcherComponent::publishMapAndPose(
     }
   }
 
-  current_pose_stamped_.header.stamp = stamp;
+  current_pose_stamped_.header.stamp =
+    sensor_input_stamp_.nanoseconds() != 0 ? sensor_input_stamp_ : stamp;
   current_pose_stamped_.pose.position.x = position.x();
   current_pose_stamped_.pose.position.y = position.y();
   current_pose_stamped_.pose.position.z = position.z();

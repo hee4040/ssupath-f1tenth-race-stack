@@ -37,7 +37,8 @@ private:
     const double BIG            = get_parameter("big_unc").as_double();
 
     geometry_msgs::msg::PoseWithCovarianceStamped out;
-    out.header = msg->header;
+    const auto sensor_input_stamp = msg->header.stamp;
+    out.header.stamp = sensor_input_stamp;  // NDT stamp 보존
     // EKF의 params.pose_frame_id와 반드시 같아야 한다. (기본: "map")
     out.header.frame_id = expected_frame;
     out.pose.pose = msg->pose;

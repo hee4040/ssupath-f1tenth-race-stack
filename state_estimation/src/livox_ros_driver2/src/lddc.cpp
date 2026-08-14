@@ -31,6 +31,7 @@
 #include <iomanip>
 #include <math.h>
 #include <stdint.h>
+#include <cstring>
 
 #include "include/ros_headers.h"
 
@@ -50,8 +51,12 @@ Lddc::Lddc(int format, int multi_topic, int data_src, int output_type,
       publish_frq_(frq),
       frame_id_(frame_id),
       enable_lidar_bag_(lidar_bag),
-      enable_imu_bag_(imu_bag) {
+      enable_imu_bag_(imu_bag),
+      loc_debug_3d_(false),
+      imu_publish_frq_(50.0) {
   publish_period_ns_ = kNsPerSecond / publish_frq_;
+  imu_publish_period_ns_ = static_cast<uint64_t>(1e9 / imu_publish_frq_);
+  std::memset(last_imu_pub_stamp_ns_, 0, sizeof(last_imu_pub_stamp_ns_));
   lds_ = nullptr;
   memset(private_pub_, 0, sizeof(private_pub_));
   memset(private_imu_pub_, 0, sizeof(private_imu_pub_));
@@ -68,8 +73,12 @@ Lddc::Lddc(int format, int multi_topic, int data_src, int output_type,
       data_src_(data_src),
       output_type_(output_type),
       publish_frq_(frq),
-      frame_id_(frame_id) {
+      frame_id_(frame_id),
+      loc_debug_3d_(false),
+      imu_publish_frq_(50.0) {
   publish_period_ns_ = kNsPerSecond / publish_frq_;
+  imu_publish_period_ns_ = static_cast<uint64_t>(1e9 / imu_publish_frq_);
+  std::memset(last_imu_pub_stamp_ns_, 0, sizeof(last_imu_pub_stamp_ns_));
   lds_ = nullptr;
 #if 0
   bag_ = nullptr;
@@ -178,9 +187,37 @@ void Lddc::PollingLidarPointCloudData(uint8_t index, LidarDevice *lidar) {
 
 void Lddc::PollingLidarImuData(uint8_t index, LidarDevice *lidar) {
   LidarImuDataQueue& p_queue = lidar->imu_data;
+  ImuData latest;
+  bool has_sample = false;
   while (!lds_->IsRequestExit() && !p_queue.Empty()) {
-    PublishImuData(p_queue, index);
+    ImuData imu_data;
+    if (!p_queue.Pop(imu_data)) {
+      break;
+    }
+    latest = imu_data;
+    has_sample = true;
   }
+  if (!has_sample) {
+    return;
+  }
+  PublishImuData(latest, index);
+}
+
+uint64_t Lddc::MeanPacketReceiveTimeNs(const StoragePacket& pkg) const {
+  if (pkg.mean_receive_time_ns != 0) {
+    return pkg.mean_receive_time_ns;
+  }
+  return pkg.base_time;
+}
+
+uint64_t Lddc::ResolveFrameHeaderStampNs(const StoragePacket& pkg) const {
+  if (loc_debug_3d_) {
+    return MeanPacketReceiveTimeNs(pkg);
+  }
+  if (!pkg.points.empty()) {
+    return pkg.base_time;
+  }
+  return 0;
 }
 
 void Lddc::PrepareExit(void) {
@@ -306,9 +343,7 @@ void Lddc::InitPointcloud2Msg(const StoragePacket& pkg, PointCloud2& cloud, uint
   cloud.is_bigendian = false;
   cloud.is_dense     = true;
 
-  if (!pkg.points.empty()) {
-    timestamp = pkg.base_time;
-  }
+  timestamp = ResolveFrameHeaderStampNs(pkg);
 
   #ifdef BUILDING_ROS1
       cloud.header.stamp = ros::Time( timestamp / 1000000000.0);
@@ -360,10 +395,7 @@ void Lddc::InitCustomMsg(CustomMsg& livox_msg, const StoragePacket& pkg, uint8_t
   ++msg_seq;
 #endif
 
-  uint64_t timestamp = 0;
-  if (!pkg.points.empty()) {
-    timestamp = pkg.base_time;
-  }
+  uint64_t timestamp = ResolveFrameHeaderStampNs(pkg);
   livox_msg.timebase = timestamp;
 
 #ifdef BUILDING_ROS1
@@ -495,11 +527,14 @@ void Lddc::InitImuMsg(const ImuData& imu_data, ImuMsg& imu_msg, uint64_t& timest
   imu_msg.linear_acceleration.z = imu_data.acc_z;
 }
 
-void Lddc::PublishImuData(LidarImuDataQueue& imu_data_queue, const uint8_t index) {
-  ImuData imu_data;
-  if (!imu_data_queue.Pop(imu_data)) {
-    //printf("Publish imu data failed, imu data queue pop failed.\n");
-    return;
+void Lddc::PublishImuData(const ImuData& imu_data, const uint8_t index) {
+  const uint64_t stamp_ns = imu_data.time_stamp;
+  if (index < kMaxSourceLidar) {
+    const uint64_t last = last_imu_pub_stamp_ns_[index];
+    if (last != 0 && stamp_ns >= last && (stamp_ns - last) < imu_publish_period_ns_) {
+      return;
+    }
+    last_imu_pub_stamp_ns_[index] = stamp_ns;
   }
 
   ImuMsg imu_msg;
@@ -640,7 +675,7 @@ PublisherPtr Lddc::GetCurrentImuPublisher(uint8_t handle) {
 }
 #elif defined BUILDING_ROS2
 std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentPublisher(uint8_t handle) {
-  uint32_t queue_size = kMinEthPacketQueueSize;
+  constexpr uint32_t queue_size = 1;  // keep-latest ROS publish depth
   if (use_multi_topic_) {
     if (!private_pub_[handle]) {
       char name_str[48];
@@ -650,14 +685,12 @@ std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentPublisher(uint8_t handle)
       snprintf(name_str, sizeof(name_str), "livox/lidar_%s",
           ReplacePeriodByUnderline(ip_string).c_str());
       std::string topic_name(name_str);
-      queue_size = queue_size * 2; // queue size is 64 for only one lidar
       private_pub_[handle] = CreatePublisher(transfer_format_, topic_name, queue_size);
     }
     return private_pub_[handle];
   } else {
     if (!global_pub_) {
       std::string topic_name("livox/lidar");
-      queue_size = queue_size * 8; // shared queue size is 256, for all lidars
       global_pub_ = CreatePublisher(transfer_format_, topic_name, queue_size);
     }
     return global_pub_;
@@ -665,7 +698,7 @@ std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentPublisher(uint8_t handle)
 }
 
 std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentImuPublisher(uint8_t handle) {
-  uint32_t queue_size = kMinEthPacketQueueSize;
+  constexpr uint32_t queue_size = 1;  // keep-latest ROS publish depth
   if (use_multi_topic_) {
     if (!private_imu_pub_[handle]) {
       char name_str[48];
@@ -674,7 +707,6 @@ std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentImuPublisher(uint8_t hand
       snprintf(name_str, sizeof(name_str), "livox/imu_%s",
           ReplacePeriodByUnderline(ip_string).c_str());
       std::string topic_name(name_str);
-      queue_size = queue_size * 2; // queue size is 64 for only one lidar
       private_imu_pub_[handle] = CreatePublisher(kLivoxImuMsg, topic_name,
           queue_size);
     }
@@ -682,7 +714,6 @@ std::shared_ptr<rclcpp::PublisherBase> Lddc::GetCurrentImuPublisher(uint8_t hand
   } else {
     if (!global_imu_pub_) {
       std::string topic_name("livox/imu");
-      queue_size = queue_size * 8; // shared queue size is 256, for all lidars
       global_imu_pub_ = CreatePublisher(kLivoxImuMsg, topic_name, queue_size);
     }
     return global_imu_pub_;

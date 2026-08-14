@@ -52,6 +52,7 @@ class LidarPubHandler {
   uint64_t GetRecentTimeStamp();
   uint32_t GetLidarPointCloudsSize();
   uint64_t GetLidarBaseTime();
+  uint64_t GetMeanReceiveTimeNs() const;
 
  private:
   void LivoxLidarPointCloudProcess(RawPacket & pkt);
@@ -69,6 +70,9 @@ class LidarPubHandler {
   };
   std::mutex mutex_;
   std::atomic_bool is_set_extrinsic_params_;
+  uint64_t receive_time_sum_ns_{0};
+  uint32_t receive_time_count_{0};
+  uint64_t last_mean_receive_time_ns_{0};
 };
   
 class PubHandler {

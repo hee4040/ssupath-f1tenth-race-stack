@@ -132,6 +132,7 @@ void Lds::StorageLvxPointData(PointFrame* frame) {
     PointPacket& lidar_point = frame->lidar_point[i];
 
     uint64_t base_time = frame->base_time[i];
+    lidar_point.mean_receive_time_ns = frame->mean_receive_time_ns[i];
     uint8_t index = 0;
     int8_t ret = cache_index_.LvxGetIndex(lidar_point.lidar_type, lidar_point.handle, index);
     if (ret != 0) {
@@ -156,6 +157,7 @@ void Lds::StoragePointData(PointFrame* frame) {
     //printf("StoragePointData, lidar_type:%u, point_num:%lu.\n", lidar_point.lidar_type, lidar_point.points_num);
 
     uint64_t base_time = frame->base_time[i];
+    lidar_point.mean_receive_time_ns = frame->mean_receive_time_ns[i];
 
     uint8_t index = 0;
     int8_t ret = cache_index_.GetIndex(lidar_point.lidar_type, lidar_point.handle, index);

@@ -1,6 +1,12 @@
 /**:
   ros__parameters:
     show_debug_info: false
+    3d_loc_debug: true
+    enable_sensor_delay_log: true
+    sensor_delay_csv_dir: "/home/misys/forza_ws/race_stack/plusresult"
+    sensor_delay_csv_path: ""
+    sensor_delay_log_throttle_sec: 1.0
+    sensor_delay_imu_vesc_topic: "/timestamp_relay_3d/imu_vesc_delay"
     enable_yaw_bias_estimation: false
     # AGX Orin: 40→100Hz. 스캔(~10Hz)·odom(26Hz) 사이 추측항법 신선도↑,
     # 제어기에 더 부드럽고 최신인 pose 공급. proc_stddev_*_c는 연속시간 잡음이라 주파수 바뀌어도 추정 일관성 유지.

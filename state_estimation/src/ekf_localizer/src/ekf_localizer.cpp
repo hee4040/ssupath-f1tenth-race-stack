@@ -36,11 +36,18 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <cmath>
+#include <ctime>
+#include <filesystem>
 #include <functional>
+#include <iomanip>
+#include <limits>
 #include <memory>
 #include <queue>
 #include <string>
 #include <utility>
+
+#include <std_msgs/msg/float64_multi_array.hpp>
 
 // clang-format off
 #define PRINT_MAT(X) std::cout << #X << ":\n" << X << std::endl << std::endl
@@ -60,7 +67,24 @@ EKFLocalizer::EKFLocalizer(const std::string & node_name, const rclcpp::NodeOpti
   ekf_dt_(params_.ekf_dt),
   dim_x_(6 /* x, y, yaw, yaw_bias, vx, wz */),
   pose_queue_(params_.pose_smoothing_steps),
-  twist_queue_(params_.twist_smoothing_steps)
+  twist_queue_(params_.twist_smoothing_steps),
+  last_pose_sensor_stamp_(0, 0, RCL_ROS_TIME),
+  has_pose_sensor_stamp_(false),
+  last_twist_sensor_stamp_(0, 0, RCL_ROS_TIME),
+  has_twist_sensor_stamp_(false),
+  last_imu_delay_s_(std::numeric_limits<double>::quiet_NaN()),
+  last_vesc_delay_s_(std::numeric_limits<double>::quiet_NaN()),
+  last_lidar_delay_s_(std::numeric_limits<double>::quiet_NaN()),
+  last_gyro_twist_delay_s_(std::numeric_limits<double>::quiet_NaN()),
+  has_imu_delay_(false),
+  has_vesc_delay_(false),
+  has_lidar_delay_(false),
+  has_gyro_twist_delay_(false),
+  last_imu_stamp_(0, 0, RCL_ROS_TIME),
+  last_vesc_stamp_(0, 0, RCL_ROS_TIME),
+  has_imu_stamp_(false),
+  has_vesc_stamp_(false),
+  last_sensor_delay_csv_write_(0, 0, RCL_ROS_TIME)
 {
   /* convert to continuous to discrete */
   proc_cov_vx_d_ = std::pow(params_.proc_stddev_vx_c * ekf_dt_, 2.0);
@@ -96,6 +120,9 @@ EKFLocalizer::EKFLocalizer(const std::string & node_name, const rclcpp::NodeOpti
     "in_pose_with_covariance", 1, std::bind(&EKFLocalizer::callbackPoseWithCovariance, this, _1));
   sub_twist_with_cov_ = create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>(
     "in_twist_with_covariance", 1, std::bind(&EKFLocalizer::callbackTwistWithCovariance, this, _1));
+  sub_imu_vesc_delay_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+    params_.sensor_delay_imu_vesc_topic, rclcpp::QoS{10},
+    std::bind(&EKFLocalizer::callbackImuVescDelay, this, _1));
   service_trigger_node_ = create_service<std_srvs::srv::SetBool>(
     "trigger_node_srv",
     std::bind(
@@ -119,6 +146,29 @@ EKFLocalizer::EKFLocalizer(const std::string & node_name, const rclcpp::NodeOpti
   // SH YUN (add ekf mode) on 250718
   this->declare_parameter<std::string>("ekf_mode");
   this->get_parameter("ekf_mode", ekf_mode_);
+
+  if (params_.enable_sensor_delay_log) {
+    std::error_code ec;
+    std::filesystem::create_directories(params_.sensor_delay_csv_dir, ec);
+    std::string csv_path = params_.sensor_delay_csv_path;
+    if (csv_path.empty()) {
+      const auto now_sys = std::chrono::system_clock::now();
+      const std::time_t t = std::chrono::system_clock::to_time_t(now_sys);
+      std::tm tm{};
+      localtime_r(&t, &tm);
+      char buf[32];
+      std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm);
+      csv_path = params_.sensor_delay_csv_dir + "/3d_timestamp_relay_" + buf + ".csv";
+    }
+    sensor_delay_csv_.open(csv_path, std::ios::out);
+    if (sensor_delay_csv_.is_open()) {
+      sensor_delay_csv_ << "t_now_sec,delay_imu_s,delay_vesc_s,delay_lidar_s,delay_gyro_twist_s,"
+                           "stamp_imu_sec,stamp_vesc_sec,stamp_lidar_sec,stamp_gyro_twist_sec\n";
+      RCLCPP_INFO(get_logger(), "sensor delay CSV: %s", csv_path.c_str());
+    } else {
+      RCLCPP_WARN(get_logger(), "Failed to open sensor delay CSV: %s", csv_path.c_str());
+    }
+  }
 }
 
 /*
@@ -214,6 +264,9 @@ void EKFLocalizer::timerCallback()
     DEBUG_INFO(get_logger(), "------------------------- end Pose -------------------------\n");
   }
   pose_no_update_count_ = pose_is_updated ? 0 : (pose_no_update_count_ + 1);
+  if (pose_is_updated) {
+    sampleSensorDelay("lidar");
+  }
 
   /* twist measurement update */
 
@@ -243,6 +296,11 @@ void EKFLocalizer::timerCallback()
     DEBUG_INFO(get_logger(), "------------------------- end Twist -------------------------\n");
   }
   twist_no_update_count_ = twist_is_updated ? 0 : (twist_no_update_count_ + 1);
+  if (twist_is_updated) {
+    sampleSensorDelay("gyro_twist");
+  }
+
+  const rclcpp::Time output_stamp = getOutputStamp();
 
   const double x = ekf_.getXelement(IDX::X);
   const double y = ekf_.getXelement(IDX::Y);
@@ -258,7 +316,7 @@ void EKFLocalizer::timerCallback()
   const double wz = ekf_.getXelement(IDX::WZ);
 
   current_ekf_pose_.header.frame_id = params_.pose_frame_id;
-  current_ekf_pose_.header.stamp = this->now();
+  current_ekf_pose_.header.stamp = output_stamp;
   current_ekf_pose_.pose.position = tier4_autoware_utils::createPoint(x, y, z);
   current_ekf_pose_.pose.orientation =
     tier4_autoware_utils::createQuaternionFromRPY(roll, pitch, yaw);
@@ -268,13 +326,14 @@ void EKFLocalizer::timerCallback()
     tier4_autoware_utils::createQuaternionFromRPY(roll, pitch, biased_yaw);
 
   current_ekf_twist_.header.frame_id = "base_link";
-  current_ekf_twist_.header.stamp = this->now();
+  current_ekf_twist_.header.stamp = output_stamp;
   current_ekf_twist_.twist.linear.x = vx;
   current_ekf_twist_.twist.angular.z = wz;
 
   /* publish ekf result */
   publishEstimateResult();
   publishDiagnostics();
+  flushSensorDelayCsv();
 }
 
 void EKFLocalizer::showCurrentX()
@@ -307,7 +366,7 @@ void EKFLocalizer::timerTFCallback()
   // EKF가 갖고 있는 map 기준의 Pose를 그대로 TF(map -> child_frame)로 브로드캐스트
   geometry_msgs::msg::TransformStamped tf_map_bl =
       tier4_autoware_utils::pose2transform(current_ekf_pose_, child_frame);
-  tf_map_bl.header.stamp = this->now();   // 최신 시각으로
+  tf_map_bl.header.stamp = getOutputStamp();
   // tf_br_->sendTransform(tf_map_bl);
 }
 
@@ -518,6 +577,9 @@ bool EKFLocalizer::measurementUpdatePose(const geometry_msgs::msg::PoseWithCovar
 
   updateSimple1DFilters(pose_with_z_delay, params_.pose_smoothing_steps);
 
+  last_pose_sensor_stamp_ = pose.header.stamp;
+  has_pose_sensor_stamp_ = true;
+
   // debug
   const Eigen::MatrixXd X_result = ekf_.getLatestX();
   DEBUG_PRINT_MAT(X_result.transpose());
@@ -598,6 +660,9 @@ bool EKFLocalizer::measurementUpdateTwist(
 
   ekf_.updateWithDelay(y, C, R, delay_step);
 
+  last_twist_sensor_stamp_ = twist.header.stamp;
+  has_twist_sensor_stamp_ = true;
+
   // debug
   const Eigen::MatrixXd X_result = ekf_.getLatestX();
   DEBUG_PRINT_MAT(X_result.transpose());
@@ -609,9 +674,93 @@ bool EKFLocalizer::measurementUpdateTwist(
 /*
  * publishEstimateResult
  */
+rclcpp::Time EKFLocalizer::getOutputStamp() const
+{
+  if (!params_.loc_debug_3d) {
+    return this->now();
+  }
+  if (has_pose_sensor_stamp_ && has_twist_sensor_stamp_) {
+    return (last_pose_sensor_stamp_ < last_twist_sensor_stamp_) ? last_twist_sensor_stamp_
+                                                                : last_pose_sensor_stamp_;
+  }
+  if (has_pose_sensor_stamp_) {
+    return last_pose_sensor_stamp_;
+  }
+  if (has_twist_sensor_stamp_) {
+    return last_twist_sensor_stamp_;
+  }
+  return this->now();
+}
+
+void EKFLocalizer::callbackImuVescDelay(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  if (!msg || msg->data.size() < 4) {
+    return;
+  }
+  last_imu_delay_s_ = msg->data[0];
+  last_vesc_delay_s_ = msg->data[1];
+  has_imu_delay_ = true;
+  has_vesc_delay_ = true;
+  last_imu_stamp_ =
+    rclcpp::Time(static_cast<int64_t>(msg->data[2] * 1e9), this->get_clock()->get_clock_type());
+  last_vesc_stamp_ =
+    rclcpp::Time(static_cast<int64_t>(msg->data[3] * 1e9), this->get_clock()->get_clock_type());
+  has_imu_stamp_ = true;
+  has_vesc_stamp_ = true;
+  flushSensorDelayCsv();
+}
+
+void EKFLocalizer::sampleSensorDelay(const std::string & name)
+{
+  if (!params_.enable_sensor_delay_log) {
+    return;
+  }
+  if (name == "lidar") {
+    if (!has_pose_sensor_stamp_) {
+      return;
+    }
+    last_lidar_delay_s_ = (this->now() - last_pose_sensor_stamp_).seconds();
+    has_lidar_delay_ = true;
+  } else if (name == "gyro_twist") {
+    if (!has_twist_sensor_stamp_) {
+      return;
+    }
+    last_gyro_twist_delay_s_ = (this->now() - last_twist_sensor_stamp_).seconds();
+    has_gyro_twist_delay_ = true;
+  }
+}
+
+void EKFLocalizer::flushSensorDelayCsv()
+{
+  if (!params_.enable_sensor_delay_log || !sensor_delay_csv_.is_open()) {
+    return;
+  }
+  const rclcpp::Time t_now = this->now();
+  if (
+    last_sensor_delay_csv_write_.nanoseconds() != 0 &&
+    (t_now - last_sensor_delay_csv_write_).seconds() < params_.sensor_delay_log_throttle_sec) {
+    return;
+  }
+  last_sensor_delay_csv_write_ = t_now;
+
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double delay_imu = has_imu_delay_ ? last_imu_delay_s_ : nan;
+  const double delay_vesc = has_vesc_delay_ ? last_vesc_delay_s_ : nan;
+  const double delay_lidar = has_lidar_delay_ ? last_lidar_delay_s_ : nan;
+  const double delay_gyro = has_gyro_twist_delay_ ? last_gyro_twist_delay_s_ : nan;
+  const double stamp_imu = has_imu_stamp_ ? last_imu_stamp_.seconds() : nan;
+  const double stamp_vesc = has_vesc_stamp_ ? last_vesc_stamp_.seconds() : nan;
+  const double stamp_lidar = has_pose_sensor_stamp_ ? last_pose_sensor_stamp_.seconds() : nan;
+  const double stamp_gyro = has_twist_sensor_stamp_ ? last_twist_sensor_stamp_.seconds() : nan;
+
+  sensor_delay_csv_ << std::setprecision(17) << t_now.seconds() << "," << delay_imu << ","
+                    << delay_vesc << "," << delay_lidar << "," << delay_gyro << "," << stamp_imu
+                    << "," << stamp_vesc << "," << stamp_lidar << "," << stamp_gyro << "\n";
+}
+
 void EKFLocalizer::publishEstimateResult()
 {
-  rclcpp::Time current_time = this->now();
+  rclcpp::Time current_time = getOutputStamp();
   const Eigen::MatrixXd X = ekf_.getLatestX();
   const Eigen::MatrixXd P = ekf_.getLatestP();
 

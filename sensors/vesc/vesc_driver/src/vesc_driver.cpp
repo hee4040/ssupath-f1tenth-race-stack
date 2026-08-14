@@ -86,9 +86,9 @@ VescDriver::VescDriver(const rclcpp::NodeOptions & options)
   }
 
   // create vesc state (telemetry) publisher
-  state_pub_ = create_publisher<VescStateStamped>("sensors/core", rclcpp::QoS{10});
-  imu_pub_ = create_publisher<VescImuStamped>("sensors/imu", rclcpp::QoS{10});
-  imu_std_pub_ = create_publisher<Imu>("sensors/imu/raw", rclcpp::QoS{10});
+  state_pub_ = create_publisher<VescStateStamped>("sensors/core", rclcpp::QoS{1});
+  imu_pub_ = create_publisher<VescImuStamped>("sensors/imu", rclcpp::QoS{1});
+  imu_std_pub_ = create_publisher<Imu>("sensors/imu/raw", rclcpp::QoS{1});
 
   // since vesc state does not include the servo position, publish the commanded
   // servo position as a "sensor"
@@ -182,7 +182,8 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
       std::dynamic_pointer_cast<VescPacketValues const>(packet);
 
     auto state_msg = VescStateStamped();
-    state_msg.header.stamp = now();
+    const auto receive_stamp = this->now();  // 호스트 수신 시각 = stamp 정의 지점
+    state_msg.header.stamp = receive_stamp;
 
     state_msg.state.voltage_input = values->v_in();
     state_msg.state.current_motor = values->avg_motor_current();
@@ -228,9 +229,10 @@ void VescDriver::vescPacketCallback(const std::shared_ptr<VescPacket const> & pa
 
     auto imu_msg = VescImuStamped();
     auto std_imu_msg = Imu();
-    imu_msg.header.stamp = now();
+    const auto imu_receive_stamp = this->now();  // 호스트 수신 시각 = stamp 정의 지점
+    imu_msg.header.stamp = imu_receive_stamp;
     imu_msg.header.frame_id = "imu";
-    std_imu_msg.header.stamp = now();
+    std_imu_msg.header.stamp = imu_receive_stamp;
     std_imu_msg.header.frame_id = "imu";
 
     // in SI unit rad
