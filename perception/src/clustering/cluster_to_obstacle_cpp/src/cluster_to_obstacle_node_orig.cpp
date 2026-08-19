@@ -5,6 +5,7 @@
 #include <f110_msgs/msg/obstacle.hpp>
 #include <f110_msgs/msg/wpnt_array.hpp>
 
+#include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -78,6 +79,7 @@ public:
 
     min_obs_size_           = declare_parameter<double>("min_obs_size", 0.05);
     max_obs_size_           = declare_parameter<double>("max_obs_size", 0.5);
+    max_viewing_distance_   = declare_parameter<double>("max_viewing_distance", 5.0); //최대 장애물 탐지거리, 5m
     // 장애물의 '안쪽 끝'이 트랙 경계(d_left/d_right)보다 이만큼 안으로 들어와야 인정 [m].
     // 예전 boundaries_inflation 의 역할까지 흡수한 단일 문턱이다.
     min_intrusion_          = declare_parameter<double>("min_intrusion", 0.0);
@@ -118,6 +120,9 @@ public:
         fallback_waypoints_topic_, 10,
         [this](const f110_msgs::msg::WpntArray::SharedPtr msg) { pathCb(msg, false); });
     }
+
+    car_state_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      "/car_state/frenet/odom", 10, std::bind(&ClusterToObstacle::carStateCb, this, _1));
 
     cluster_sub_ = create_subscription<tier4_perception_msgs::msg::DetectedObjectsWithFeature>(
       cluster_topic_, 10, std::bind(&ClusterToObstacle::clusterCb, this, _1));
@@ -229,6 +234,10 @@ private:
     // RCLCPP_INFO(get_logger(), "Global path received & boundaries published. track_length=%.3f", track_length_);
   }
 
+  // ---------- Car s callback ----------
+  void carStateCb(const nav_msgs::msg::Odometry::SharedPtr msg) {
+    car_s_ = msg->pose.pose.position.x;  // frenet/odom: pos.x = s
+  }
 
   // ---------- Cluster callback ----------
   void clusterCb(const tier4_perception_msgs::msg::DetectedObjectsWithFeature::SharedPtr msg) {
@@ -342,7 +351,7 @@ private:
         const double d = d_out[i];
         const double size = valids[i].size;
 
-        const RejReason rr = classifyPoint(s, d, size);
+        const RejReason rr = classifyPoint(s, d, car_s_, size);
         stat_reason_[static_cast<size_t>(rr)]++;
         if (rr != RejReason::PASS && rr != RejReason::PASS_NARROW) continue;
       //   if ( size > max_obs_size_){ // size filtering
@@ -430,7 +439,15 @@ private:
     stat_reason_.fill(0);
   }
 
-  
+  // ---------- Helpers ----------
+  inline double wrap_s(double x) const {
+    if (track_length_ <= 0.0) return x;
+    double m = std::fmod(x, track_length_);
+    if (m >  track_length_/2.0) m -= track_length_;
+    if (m < -track_length_/2.0) m += track_length_;
+    return m;
+  }
+
   // 장애물의 '가로 끝'까지 보고 트랙 안팎을 판정한다.
   // 예전에는 중심점 (s,d) 한 점만 검사해서, 벽에 붙은 장애물은 중심이 경계 밖이라는
   // 이유로 통째로 버려졌다(= raw_obstacles 에 아예 안 실림 -> 하류 전부 못 봄).
@@ -438,11 +455,12 @@ private:
   // laserPointOnTrack 과 완전히 같은 판정을 하되, 통과/기각의 '사유'를 돌려준다.
   // 판정 로직은 여기 한 곳에만 두고 laserPointOnTrack 은 이걸 감싸기만 한다
   // (두 벌로 복제하면 한쪽만 고쳐져 통계와 실제 거동이 어긋난다).
-  RejReason classifyPoint(double s, double d, double size = 0.0) const {
+  RejReason classifyPoint(double s, double d, double car_s, double size = 0.0) const {
     const double half = std::max(0.0, size * edge_fraction_);
     const double d_lo = d - half;   // 장애물 오른쪽 끝
     const double d_hi = d + half;   // 장애물 왼쪽 끝
 
+    if (wrap_s(s - car_s) > max_viewing_distance_) return RejReason::FAR_S;
     // 아래 둘은 '문턱 적용 전' 전역 경계 기준이다(pathCb 주석 참조).
     if (std::fabs(d) - half >= biggest_d_) return RejReason::OUT_WIDEST;   // 트랙 최광부 밖
     if (std::fabs(d) <= smallest_d_) return RejReason::PASS_NARROW;        // 트랙 최협부 안 -> 무조건 통과
@@ -464,8 +482,8 @@ private:
     return RejReason::PASS;
   }
 
-  bool laserPointOnTrack(double s, double d, double size = 0.0) const {
-    const RejReason r = classifyPoint(s, d, size);
+  bool laserPointOnTrack(double s, double d, double car_s, double size = 0.0) const {
+    const RejReason r = classifyPoint(s, d, car_s, size);
     return r == RejReason::PASS || r == RejReason::PASS_NARROW;
   }
 
@@ -502,6 +520,7 @@ private:
 
   // Pubs/Subs
   rclcpp::Subscription<f110_msgs::msg::WpntArray>::SharedPtr wp_sub_, wp_fallback_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr car_state_sub_;
   rclcpp::Subscription<tier4_perception_msgs::msg::DetectedObjectsWithFeature>::SharedPtr cluster_sub_;
   rclcpp::Publisher<f110_msgs::msg::ObstacleArray>::SharedPtr obstacles_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr boundary_mrk_pub_;
@@ -515,6 +534,7 @@ private:
   std::unique_ptr<FrenetConverter> fr_converter_;
   std::vector<double> s_array_, d_right_array_, d_left_array_;
   double smallest_d_{0.0}, biggest_d_{0.0}, track_length_{0.0};
+  double car_s_{0.0};
 
   // Marker (latched)
   visualization_msgs::msg::Marker detection_boundaries_marker_;
