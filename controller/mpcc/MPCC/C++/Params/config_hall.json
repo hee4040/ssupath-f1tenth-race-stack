@@ -1,0 +1,16 @@
+
+{
+  "n_sqp": 1,
+  "n_reset": 5,
+  "sqp_mixing" : 1.0,
+  "n_sim": 600,
+  "Ts": 0.05,
+  "v0": 0.1,
+
+  "model_path": "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/model_hall.json",
+  "cost_path": "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/cost_hall.json",
+  "bounds_path": "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/bounds_hall.json",
+  "track_path": "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/track_hall.json",
+  "normalization_path": "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/normalization_hall.json"
+}
+

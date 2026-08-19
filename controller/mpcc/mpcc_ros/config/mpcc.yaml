@@ -1,0 +1,19 @@
+mpcc_node:
+  ros__parameters:
+    # JSON 설정 파일 경로
+    config_file: "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/config_hall.json"
+
+    # 제어 루프 주기 (Hz)
+    loop_rate_hz: 40.0
+
+    # Corridor 사용 조건 (s 차이 threshold)
+    corridor_s_threshold: 0.5
+
+    # 스티어링 ↔ 서보 변환 계수 (vesc.yaml과 맞춰주기)
+    steering_angle_to_servo_gain: -1.0
+    steering_angle_to_servo_offset: 0.5
+
+    # 초기 상태 (측위값이 덮어씀, 필요하면 세팅)
+    x0: [0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0,
+         0.0, 0.0, 0.0, 0.0]

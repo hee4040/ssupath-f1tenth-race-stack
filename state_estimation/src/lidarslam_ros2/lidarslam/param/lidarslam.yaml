@@ -1,0 +1,143 @@
+scan_matcher:
+  ros__parameters:
+    global_frame_id: "map"
+    robot_frame_id: "base_link"
+    # NDT / VGICP_CUDA / (그 외는 GICP). 각 분기는 자기 파라미터만 읽는다 —
+    # NDT는 ndt_resolution·ndt_num_threads, VGICP_CUDA는 vgicp_* 만.
+    registration_method: "NDT"
+
+    # !! 이 값이 lobby 측위의 핵심 파라미터다. 1.8 로 올리지 말 것 !!
+    # 0728_1535 실주행 실패의 원인이 정확히 ndt_resolution 1.8 이었다. 차가 완전히
+    # 정지(휠 오도메트리 델타 0)한 20.8초 동안 /ndt_pose의 x가 -1.0 ~ -1.8m를 왕복하며
+    # 프레임간 평균 33cm(최대 71cm) 튀었고 평균 위치가 실제보다 0.31m 뒤였다.
+    # 43x26m 개활 로비에서는 1.8m voxel 하나가 종방향 구조를 통째로 삼켜 전후 구속이 사라진다.
+    # (4F 복도 시절엔 1.8로도 잘 됐다 — 벽이 가까워 voxel 하나에 구조가 여럿 들어갔기 때문.)
+    #
+    # 같은 bag 오프라인 A/B (정지구간 프레임간 점프 / 정합률 20cm / 격자탐색 참값 대비 위치오차):
+    #   NDT 0.5   0.8cm  91.0%  19.6cm      NDT 1.5   1.9cm  91.5%  13.7cm
+    #   NDT 0.7   1.0cm  91.0%  17.7cm      NDT 1.6   3.3cm  91.3%  13.9cm
+    #   NDT 1.0   1.4cm  91.6%   9.9cm      NDT 1.8  32.6cm  89.4%  31.2cm  <- 붕괴
+    #   NDT 1.3   1.7cm  91.8%   9.1cm      VGICP0.5  6.7cm  91.9%  12.2cm
+    # 1.6과 1.8 사이에 절벽이 있다. 1.3은 전 구간(정지/주행/충돌 후) 최고점이었고
+    # 충돌 같은 급격한 전이 후에도 유일하게 락을 유지했다(충돌 후 정합률 91.7%,
+    # VGICP는 70.8%로 발산). align 시간도 중앙 13.5ms / p95 23.7ms 로 VGICP(21.4 / 78.8ms)보다 빠르다.
+    ndt_resolution: 1.5
+    # AGX Orin 12코어. VGICP_CUDA 정합은 GPU에서 돌아 이 값은 no-op이며
+    # (setNumThreads는 registration_method=="NDT" 분기에서만 적용), NDT 폴백/일관성 위해 8로 상향.
+    ndt_num_threads: 8
+    #gicp_corr_dist_threshold: 5.0
+    # 0723 lobby 실패 분석 결과 1.0 -> 0.5.
+    # 1.0m voxel에서는 10m 거리의 yaw 6.5° 오차(횡방향 약 1m)가 voxel 하나 안에 들어가
+    # 비용함수가 이를 구분하지 못했다. 넓은 로비처럼 개활한 공간에서 특히 치명적.
+    # (voxel 수/GPU메모리는 늘지만 AGX Orin 여유로 흡수)
+    vgicp_resolution: 0.5
+    vgicp_k_correspondences: 20         # AGX Orin: 10→20(코드 기본값). 점별 공분산(평면추정) 더 견고, GPU 여유로 흡수
+    vgicp_nn_method: "RBF_KERNEL"       # RBF_KERNEL | CPU_KDTREE | BRUTEFORCE
+    vgicp_kernel_width: 0.5
+    # 반복 상한 / 수렴 임계. 0723 클린 실측(설정 정상 반영 후)에서 align은 중앙 17ms,
+    # p95 38ms로 대부분 프레임이 조기 수렴했다. 상한 64는 꼬리(max 100ms)만 만들 뿐이라
+    # 40으로 낮춰 최악 지연을 억제한다. 정합률은 96~97%로 변화 없음.
+    # (주의: 25까지 낮췄던 적이 있는데 그땐 수렴 자체를 방해해 정지 상태에서도 yaw가 틀어졌다.
+    #  40 밑으로는 내리지 말 것.)
+    vgicp_max_iterations: 40
+    vgicp_transformation_epsilon: 0.001   # 1mm. 라이다 노이즈(~cm) 대비 5e-4는 과도하게 빡빡
+    vgicp_rotation_epsilon: 0.002
+    # publish_freq를 20Hz로 올리면 스캔당 점이 이미 절반(약 4000점)이 된다.
+    # 여기서 voxel까지 더 키우면 2000점 수준으로 희박해져 yaw 구속이 약해지므로 0.15를 유지한다.
+    # (지연 병목은 이 값이 아니라 sweep 누적 시간이었다 — pc2_MID360s_launch.py 참고)
+    vg_size_for_input: 0.15
+    # 맵 target은 로드 시 1회 다운샘플(핫패스 아님)이지만 GPU voxelmap 크기와
+    # 프레임당 대응점 탐색 비용에는 계속 영향을 준다. 0.10 -> 0.14로 완화.
+    vg_size_for_map: 0.14
+    use_min_max_filter: true
+    scan_min_range: 0.5
+    # 15 -> 20으로 늘렸던 것을 되돌림. 0723 A/B 측정 결과 20m는 점을 1.5%만 늘리고
+    # 정합 품질은 동일(오히려 미세하게 나쁨)해서 연산만 낭비였다. 43x26m 로비라 15~20m
+    # 구간에 점이 거의 없다.
+    scan_max_range: 15.0
+    scan_period: 0.1
+    # ★ 바닥/천장 제거. 이 로비에서 측위가 계속 어긋나던 진짜 원인이었다.
+    # map.pcd는 점의 75.5%가 천장(z>=2.2), 6.8%가 바닥이고 벽/구조물은 17.6%뿐이다.
+    # 스캔도 58.7%가 천장이라 정합 비용의 77%를 수평면이 차지하는데, 수평면은 z/roll/pitch만
+    # 구속하고 x/y/yaw는 전혀 구속하지 못한다. 그래서 종방향 비용함수가 거의 평평해졌다.
+    # 0728_1914 정지구간 실측(벽 z0.2~2.2 기준 격자탐색, 6프레임):
+    #   필터 없음: 종방향 오차 -0.889m +- 0.108,  벽정합 47.8% (최적점 73.4%, 격차 25.6%p)
+    #   필터 적용: 종방향 오차 +0.262m +- 0.061,  벽정합 66.3% (최적점 73.9%, 격차  7.6%p)
+    # 종방향 비용함수 골 깊이 8.3%p -> 28.7%p, 반치폭 1.30m -> 0.80m.
+    # 정지 프레임간 최대 튐 16.3cm -> 5.2cm, 주행 중 79.4cm -> 33.5cm.
+    # 밴드 상한 2.2는 천장(z 2.40~2.50에 점의 31%가 몰림) 바로 아래, 하한 0.2는 바닥 반사
+    # (-0.2~+0.1에 퍼짐) 바로 위. 맵 target에도 같은 밴드가 걸린다(364792 -> 62090점).
+    # 맵이 바뀌면 z 히스토그램을 다시 보고 밴드를 맞출 것.
+    #
+    # 2026-07-28 되돌림(false): 현재 구현이 정합 target뿐 아니라 시각화용 /map 발행까지
+    # 같이 잘라서 RViz에서 맵이 거의 안 보이게 된다. 측위 개선 자체는 유효했으므로
+    # 다시 켜려면 먼저 코드에서 "정합 target만 필터, /map·map_array는 원본 발행"으로
+    # 분리할 것.
+    enable_z_filter: false
+    scan_min_z: 0.2
+    scan_max_z: 2.2
+    enable_angle_filter: false
+    fov_deg: 240.0
+    # false = 초기 포즈를 사람이 RViz "2D Pose Estimate"로 직접 잡아준다(의도된 운용 방식).
+    # 그때까지 scanmatcher는 대기하며 정합을 하지 않는다(cloud_callback이 initial_pose_received_ 검사).
+    # RViz 툴 -> /initialpose -> scanmatcher가 직접 구독(포즈 설정 + previous_odom_mat_ 리셋).
+    #
+    # true 로 자동 시작하지 않는 이유: 맵이 바뀌면 아래 좌표가 곧바로 틀려지는데,
+    # VGICP는 국소 최적화라 잘못된 초기 포즈 근처 국소최적에 갇혀 빠져나오지 못한다.
+    # 사람이 안 잡아주면 '조용히 틀린 포즈'로 도는 것보다 '아무것도 안 나오는' 편이 안전하다.
+    set_initial_pose: true
+
+    # 아래는 set_initial_pose: true 일 때만 쓰이는 폴백 값(현재 미사용).
+    # !! 맵 좌표계에 종속되므로 맵을 바꾸면 반드시 같이 바꿀 것 !!
+    # lobby_0723에서 0723 bag 정지구간을 스캔-맵 격자탐색으로 실측한 시작 포즈(정합률 95.0%, yaw 7.91deg).
+    #
+    # 버그 이력: 기존엔 키가 'initital_pose_*'(t 하나 더 많은 오타)라 코드의 'initial_pose_*'와
+    # 달랐고, ROS2는 미선언 override를 조용히 무시하므로 이 블록이 영구 무효였다
+    # (set_initial_pose: true 인데도 항상 원점 0,0,0 identity로 초기화됨).
+    # 값 18.8899/6.3295/yaw176°도 예전 4F 맵 좌표라 lobby_0723엔 맞지 않았다.
+    # (0728 재발: 오타 키가 다시 들어와 있었다. 키 이름은 initial_pose_* 가 맞다.)
+    initital_pose_x: 18.8899
+    initital_pose_y: 6.3295
+    initital_pose_z: 0.0
+    initital_pose_qx: 0.0
+    initital_pose_qy: 0.0
+    initital_pose_qz: 0.999477
+    initital_pose_qw: 0.0323506
+    use_imu: false
+    # 휠 오도메트리 델타를 NDT 초기 추정치로 사용 (고속에서 정합 지연 방지)
+    # vesc_to_odom의 publish_tf(odom->base_link)가 켜져 있어야 동작
+    use_odom: false
+    map_path: "/home/misys/forza_ws/race_stack/map.pcd"
+    publish_tf: true
+  
+    # map update 전용(slam)
+    trans_for_mapupdate: 1.5
+    num_targeted_cloud: 15
+    map_publish_period: 15.0
+
+    # debug
+    debug_flag: false     # 유일하게 실제로 동작하는 디버그 옵션 (정합시간/fitness 등 stdout 출력)
+
+    # 아래 3개는 scanmatcher_component.cpp가 declare_parameter 하지 않아 '무시'된다.
+    # 계측 기능이 있는 것처럼 오해를 줘서 주석 처리함. 지연 측정은 loc_check/measure_loc.sh 사용.
+    # debug_sim_time: false
+    # debug_wall_time: false
+    # metrics_csv_path: "/home/misys/ws_livox/data/4F_e2e_time.csv"
+
+
+graph_based_slam:
+    ros__parameters:
+      registration_method: "NDT"
+      ndt_resolution: 1.0
+      ndt_num_threads: 6                # AGX Orin 12코어: 2→6. 매핑/루프클로저 NDT(CPU 멀티스레드) 가속, 실시간 loc과 무관
+      voxel_leaf_size: 0.4
+      loop_detection_period: 1000
+      threshold_loop_closure_score: 0.7
+      # 트랙 한 바퀴 ~41m라 100m면 루프 후보가 영영 안 생김 (기존값 100.0)
+      distance_loop_closure: 30.0
+      range_of_searching_loop_closure: 20.0
+      search_submap_num: 10
+      num_adjacent_pose_cnstraints: 5
+      use_save_map_in_loop: true
+      map_path: "/home/misys/forza_ws/race_stack/map.pcd"
+      debug_flag: true

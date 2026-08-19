@@ -1,0 +1,80 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- controller manager 인자 -->
+  <arg name="LU_table" default="NUC2_hangar_pacejka"/>
+  <arg name="mode" default="PP"
+       description="Mode of operation: MAP / PP / MPCC / RL. mux가 이 값으로 제어 소스를 고정 (state 무관)"/>
+  <arg name="mapping" default="false"/>
+
+  <!-- RL 모드용: 행동->속도 매핑 상한 [m/s] 와 파라미터 파일 -->
+  <arg name="v_max" default="5.0"/>
+  <arg name="rl_param_file" default="$(find-pkg-share rl_controller)/config/rl_controller.yaml"/>
+  <arg name="rl_scan_source" default="cloud" description="cloud(실차 Livox) / laserscan(시뮬)"/>
+  <!-- 상대차 관측(obs[51:56]) 사용 여부. perception 체인(/perception/obstacles)이
+       떠 있어야 실제로 값이 채워지고, 없으면 자동으로 0(미검출) 이라 켜 두어도 안전하다. -->
+  <arg name="rl_opponent" default="true"/>
+
+  <!-- 레이싱카 버전 (L1 YAML 경로에 사용) -->
+  <arg name="racecar_version" default="NUC2"/>
+
+  <!-- l1_controller 가 사용할 L1 파라미터 YAML 경로 -->
+  <arg name="l1_controller_param_path" default="$(find-pkg-share controller_manager)/config/l1_controller.yaml"/>
+
+  <!-- mux_controller용 파라미터 파일 -->
+  <arg name="mux_controller_param_file"
+       default="$(find-pkg-share controller_manager)/config/mux_controller.yaml"/>
+
+  <!-- mpcc_node용 파라미터 파일 (mpcc_launch.xml과 동일 기본값) -->
+  <arg name="mpcc_param_file"
+       default="$(find-pkg-share mpcc_ros)/config/mpcc.yaml"/>
+
+  <!-- l1_controller: MAP/PP/FTG 전용. RL 모드에서는 rl_controller 가 같은 토픽
+       (/l1controller/control)을 발행하므로 띄우지 않는다 (l1_controller 는 mode=RL 을
+       Invalid mode 로 거부하기도 한다). -->
+  <node pkg="controller_manager"
+        exec="l1_controller"
+        name="l1_controller"
+        output="screen"
+        unless="$(eval '\'$(var mode)\' == \'RL\'')">
+    <param name="mode" value="$(var mode)"/>
+    <param name="LU_table" value="$(var LU_table)"/>
+    <param name="mapping" value="$(var mapping)"/>
+    <param name="l1_controller_param_path" value="$(var l1_controller_param_path)"/>
+  </node>
+
+  <!-- rl_controller: RL 모드일 때만. Isaac Lab 에서 학습한 DACER++ 디퓨전 정책이
+       관측을 직접 만들어 /l1controller/control 로 (steering_angle, speed) 를 낸다. -->
+  <node pkg="rl_controller"
+        exec="rl_controller"
+        name="rl_controller"
+        output="screen"
+        if="$(eval '\'$(var mode)\' == \'RL\'')">
+    <param from="$(var rl_param_file)"/>
+    <!-- type 명시 필수: v_max:=5 처럼 넘기면 문자열 "5" 가 int 로 추론돼
+         double 로 선언된 파라미터와 타입이 어긋난다. -->
+    <param name="v_max" value="$(var v_max)" type="float"/>
+    <param name="scan_source" value="$(var rl_scan_source)" type="str"/>
+    <param name="opponent_enabled" value="$(var rl_opponent)" type="bool"/>
+  </node>
+
+  <!-- mpcc_node: MPCC 모드일 때만 실행.
+       PP/MAP에서 띄우면 CPU 낭비 + (구버전 mux 기준) duty 폭주 위험이 있었음 -->
+  <node
+        pkg="mpcc_ros"
+        exec="mpcc_node"
+        name="mpcc_node"
+        output="screen"
+        if="$(eval '\'$(var mode)\' == \'MPCC\'')">
+    <param from="$(var mpcc_param_file)"/>
+  </node>
+
+  <!-- mux_controller: ctrl_mode로 제어 소스 고정
+       (PP/MAP/RL -> 항상 /l1controller/control 을 /drive 로, MPCC -> 항상 duty) -->
+  <node pkg="controller_manager"
+        exec="mux_controller"
+        name="mux_controller"
+        output="screen">
+    <param from="$(var mux_controller_param_file)"/>
+    <param name="ctrl_mode" value="$(var mode)"/>
+  </node>
+</launch>

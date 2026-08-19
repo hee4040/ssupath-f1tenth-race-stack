@@ -1,0 +1,33 @@
+<launch>
+    <arg name="racecar_version" default="NUC2" />
+    <arg name="LU_table" default="NUC2_hangar_pacejka" />
+    <arg name="overtake_mode" default="spliner" /> <!--  spliner / graph_based -->
+    <arg name="ctrl_algo" default="MAP"/> <!-- MAP / PP -->
+    <arg name="measure" default="False" />
+    
+    <!-- launch state machine -->
+    <include file="$(find-pkg-share state_machine)/launch/state_machine_launch.xml">
+        <arg name="mode" value="head_to_head"/>
+        <arg name="overtake_mode" value="$(var overtake_mode)"/>
+    </include>
+
+    <!-- SPLINE PLANNER-->
+    <!-- this is actually the only way this works -->
+    <group if="$(eval '\'$(var overtake_mode)\' == \'spliner\'')"> 
+        <include file="$(find-pkg-share graph_planner)/launch/graph_planner_launch.xml" />
+    </group>
+
+    <!-- PERCEPTION -->
+
+    <!-- tracking (/perception/detection/raw_obstacles -> /perception/obstacles)
+         2D 라이다용이므로 3D 검출 체인(passthrough/ground_segmentation/euclidean_cluster)은 띄우지 않는다.
+         3D 라이다를 쓰려면 head_to_head_3D_launch.xml 을 사용할 것.
+
+         주: 예전에는 여기서 opponent_tracker_params_cpp.yaml 로 같은 런치를 한 번 더
+         include 했으나(detect 노드용), 구/신 perception 어디에도 detect 실행파일이 없어
+         node name "tracking" 이 중복 실행되는 상태였다. 그래서 제거했다. -->
+    <include file="$(find-pkg-share tracking)/launch/tracking_launch.xml">
+        <arg name="param_file" value="$(find-pkg-share stack_master)/config/opponent_tracker_params.yaml" />
+    </include>
+
+</launch>

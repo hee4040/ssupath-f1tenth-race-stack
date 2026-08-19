@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- 강화학습(DACER++) 컨트롤러 단독 실행.
+       보통은 controller_manager/mux_controller_f110_launch.xml 이 ctrl_algo=RL 일 때
+       포함해서 띄우므로 직접 쓸 일은 디버깅뿐이다. -->
+  <arg name="rl_param_file" default="$(find-pkg-share rl_controller)/config/rl_controller.yaml"/>
+  <arg name="v_max" default="5.0" description="행동->속도 매핑 상한 [m/s]"/>
+  <arg name="scan_source" default="cloud" description="cloud(실차 Livox) / laserscan(시뮬)"/>
+  <!-- 체크포인트 경로는 param 파일(config/rl_controller.yaml) 한 곳에서만 관리한다. -->
+
+
+  <node pkg="rl_controller" exec="rl_controller" name="rl_controller" output="screen">
+    <param from="$(var rl_param_file)"/>
+    <!-- type 명시 필수: v_max:=5 처럼 넘기면 "5" 가 int 로 추론된다. -->
+    <param name="v_max" value="$(var v_max)" type="float"/>
+    <param name="scan_source" value="$(var scan_source)" type="str"/>
+  </node>
+</launch>

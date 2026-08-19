@@ -1,0 +1,12 @@
+float64 x_ref_m
+float64 y_ref_m
+float64 width_right_m
+float64 width_left_m
+float64 x_normvec_m
+float64 y_normvec_m
+float64 alpha_m
+float64 s_racetraj_m
+float64 psi_racetraj_rad
+float64 kappa_racetraj_radpm
+float64 vx_racetraj_mps
+float64 ax_racetraj_mps2

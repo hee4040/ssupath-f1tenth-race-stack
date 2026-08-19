@@ -1,0 +1,17 @@
+<launch>
+    <!--tracking-->
+    <include file="$(find-pkg-share tracking)/launch/tracking_launch.xml">
+        <arg name="param_file" value="$(find-pkg-share stack_master)/config/opponent_tracker_params.yaml" />
+    </include> 
+    <!-- autoware_pointcloud_preprocessor -->
+    <include file="$(find-pkg-share autoware_pointcloud_preprocessor)/launch/passthrough_filter.launch.xml" />
+    <!-- autoware_ground_segmentation -->
+    <include file="$(find-pkg-share autoware_ground_segmentation)/launch/ray_ground_filter.launch.xml" />
+    <!-- autoware_euclidean_cluster -->
+    <include file="$(find-pkg-share autoware_euclidean_cluster)/launch/euclidean_cluster.launch.xml" />
+    <!-- cluster_to_obstacle -->
+    <include file="$(find-pkg-share cluster_to_obstacle_cpp)/launch/cluster_to_obstacle_cpp.launch.xml" />
+    <!-- pc2_to_scan -->
+    <include file="$(find-pkg-share pc2_to_scan_cpp)/launch/pc2_to_laserscan.launch.xml" />
+    
+</launch>

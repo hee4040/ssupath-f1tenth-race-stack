@@ -1,0 +1,15 @@
+<launch>
+    <!-- C++ 버전: perception_cpp 패키지 -->
+    <arg name="param_file" description="Filepath to the opponent tracking/detection config file" />
+
+    <!-- 실행 대상 변경 -->
+    <node pkg="tracking"
+          exec="tracking"
+          name="tracking"
+          output="log"
+          args="--ros-args --log-level warn">
+
+        <!-- 파라미터 파일 로드 -->
+        <param from="$(var param_file)" />
+    </node>
+</launch>

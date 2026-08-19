@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>on_track_sys_id</name>
+  <version>0.1.0</version>
+  <description>The on_track_sys_id package</description>
+
+  <maintainer email="odikici@ethz.ch">Onur Dikici</maintainer>
+
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>rclpy</depend>
+  <depend>nav_msgs</depend>
+  <depend>ackermann_msgs</depend>
+  <!-- <depend>rospkg</depend> -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

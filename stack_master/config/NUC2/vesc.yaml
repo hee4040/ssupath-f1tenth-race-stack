@@ -1,0 +1,85 @@
+/**:
+  # general parameters shared by all vesc-related nodes
+  ros__parameters:
+    # erpm (electrical rpm) = speed_to_erpm_gain * speed (meters / second) + speed_to_erpm_offset
+    #
+    # 4173.4 -> 3457 (2026-07-28). 여러 F1TENTH에서 돌려쓰는 관용값 4173.4가 이 차의
+    # 기어비/휠에 맞지 않아 약 21% 과대였다. 그래서 차는 명령보다 21% 빨리 달리고
+    # /odom은 거리를 21% 적게 셌다(= PP lookahead·섹터 속도스케일링이 전부 의도보다 높게 적용).
+    # 근거(loc_debug_0728_1644, 정속 15.05~16.15s 11프레임): 스캔매칭 속도 / 휠오돔 속도
+    #   = 1.207 ± 0.036,  use_odom:false(스캔매칭이 오돔을 전혀 모름)로 재생해도 1.207 ± 0.036.
+    # NDT는 고정 맵에 매 프레임 독립 정합이라 거리 스케일 오차가 생길 수 없으므로 휠 쪽이 틀렸다.
+    # 이 값은 ackermann_to_vesc(명령 m/s -> ERPM)와 vesc_to_odom(ERPM -> m/s) 양쪽이 함께 쓴다.
+    # 확정 검증법: 직선 5m를 줄자로 재고 /odom 이동거리와 비교(21%면 odom이 약 4m로 나옴).
+    speed_to_erpm_gain: 3457.0
+    speed_to_erpm_offset: 0.0
+
+    # servo value (0 to 1) =  steering_angle_to_servo_gain * steering angle (radians) + steering_angle_to_servo_offset
+    steering_angle_to_servo_gain: -0.65
+    steering_angle_to_servo_offset: 0.5
+
+    # Sony Wireless Controller e-stop latch.
+    # Existing controls stay untouched: L1=4(deadman), R1=5(JOY/AUTO toggle).
+    # Press Circle(idx 2) once to latch stop, Triangle(idx 3) once to release.
+    joy_estop_enabled: true
+    joy_estop_button_idx: 2
+    joy_estop_release_button_idx: 3
+    joy_estop_publish_rate_hz: 40.0
+    joy_estop_servo_position: 0.5
+
+    port: /dev/ttyACM0
+    duty_cycle_min: 0.0
+    duty_cycle_max: 1.0
+    current_min: 0.0
+    current_max: 100.0
+    brake_min: -20000.0
+    brake_max: 200000.0
+    # speed_min: -23250.0
+    # speed_max: 23250.0
+    speed_min: -43250.0
+    speed_max: 43250.0
+    position_min: 0.0
+    position_max: 0.0
+    servo_min: 0.0
+    servo_max: 1.0
+
+# No longer needed, all parameters are shared
+# ackermann_to_vesc_node:
+#   ros__parameters:
+
+vesc_to_odom_node:
+  ros__parameters:
+    odom_frame: odom
+    base_frame: base_link
+    # publish odom to base link tf
+    # scanmatcher use_odom(초기 추정치)이 이 TF를 조회하므로 필요
+    publish_tf: true
+    use_servo_cmd_to_calc_angular_velocity: true
+    # car wheelbase is about 32.4cm
+    wheelbase: .33
+    # yaw rate를 조향 '명령' 자전거모델 대신 IMU 자이로에서 받는다.
+    # 자전거모델은 서보 지연(~100ms)과 타이어 슬립을 못 담아, 0728_1644 bag 기준
+    # 2.15초 주행에 yaw가 -4.58도 틀렸다(t=15.4s엔 부호까지 반대: 모델 -0.146 rad/s,
+    # 실제 +0.262 rad/s). 같은 구간을 IMU로 적분하면 오차 -0.45도.
+    # VESC IMU 정지 바이어스는 -0.0003 rad/s(10초에 0.17도)라 적분해도 안전하다.
+    # IMU가 imu_timeout 이상 끊기면 자동으로 자전거모델로 폴백한다.
+    use_imu_angular_velocity: true
+    imu_timeout: 0.2
+
+# No longer needed, all parameters are shared
+# vesc_driver:
+#   ros__parameters:
+
+throttle_interpolator:
+  ros__parameters:
+    rpm_input_topic: commands/motor/unsmoothed_speed
+    rpm_output_topic: commands/motor/speed
+    servo_input_topic: commands/servo/unsmoothed_position
+    servo_output_topic: commands/servo/position
+
+    # servo smoother - limits acceleration and smooths anything above limit
+    max_acceleration: 2.5 # meters/second^2
+    throttle_smoother_rate: 75.0 # messages/sec
+    # servo smoother - limits rotation speed and smooths anything above limit
+    max_servo_speed: 3.2 # radians/second
+    servo_smoother_rate: 75.0 # messages/sec

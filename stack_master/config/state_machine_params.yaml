@@ -1,0 +1,84 @@
+state_machine:
+  ros__parameters:
+    rate_hz: 40  # [hz]
+    initial_state: 'GB_TRACK'  # "GB_TRACK", ...
+    test_on_car: True  # also set True if using on a bag
+    # 로컬 웨이포인트 개수 (0.1 m 간격) = 컨트롤러가 보는 경로 길이.
+    # _fuse_speed_from_global 의 역방향 감속 패스가 이 배열 안에서만 돌기 때문에
+    # 이 값이 곧 "미리 감속할 수 있는 최대 거리"이기도 하다.
+    # 2026-08-04: 110(11m)으로 올렸다가 원복. 퍼셉션이 passthrough 박스 때문에
+    # 7 m 밖을 아예 못 보므로(아래 gb_horizon_m 주석 참조) 미리 감속할 거리를 늘려도
+    # 그 거리에 장애물 정보가 없다. 브레이크만 이르게 걸려 주행이 굼떠졌다.
+    n_loc_wpnts: 70  # number of local waypoints published, 1 waypoints every 0.1 meter
+
+    volt_threshold: 11. # [V] voltage threshold below which we start screaming
+
+    force_state: False  # force state to be the one specified in force_state_choice
+
+
+    splini_ttl: 3. # [s] ttl counter for validity of spliner waypoints -> NOW DYNAMIC RECONFIGURABLE
+
+    gb_ego_width_m: 0.4 # [m], distance from gb path for rejoining 
+    lateral_width_gb_m: 0.8 # [m] lateral width within which we consider obstacles to be on the overtaking line -> NOW DYNAMIC RECONFIGURABLE
+    # TRAILING(=감속) 진입 거리.
+    # ★ 2026-08-04: 10.0 으로 올렸다가 원복. 이 값을 올려도 소용이 없다 —
+    #   퍼셉션의 진짜 상한은 passthrough_filter_node.param.yaml 의 크롭 박스
+    #   (x[-4,4] y[-7,0]) 라서 **전방 7 m 밖의 점군은 존재조차 하지 않는다.**
+    #   obs_debug_0804_1612 실측: cluster_to_obstacle 출력의 최대 전방거리 7.77 m
+    #   (박스 모서리 sqrt(4^2+7^2)=8.06 m 와 일치), 7 m 초과 검출 0.9%.
+    #   즉 7 m 를 넘는 horizon 은 전부 빈 공간을 가리킨다. 늘리려면 크롭 박스부터.
+    gb_horizon_m: 6.9 # [m] horizon considered for the global waypoints to check for obstacles
+    overtaking_horizon_m: 6.9 # [m] horizon considered for overtaking
+
+    # [m] 회피선이 장애물 "표면"에서 최소한 확보해야 하는 여유. (ego 반차폭 0.14 + 알파)
+    # _check_ofree 는 |ot_d - obs_d| < obs.size/2 + 이 값 이면 회피 불가로 본다.
+    # 0.1 이던 시절엔 장애물 반폭조차 안 세서 장애물을 뚫는 회피선도 전부 승인됐다.
+    # 반대로 너무 크면 graph_planner 가 좁은 구간에서 여유를 완화해 만든 정상 경로를
+    # 여기서 거부해버린다. 반드시 아래 구간 안에 둘 것:
+    #   veh_width/2 (=0.14, 실제 충돌) < 이 값 < veh_width/2 + min_safety_margin (=0.19)
+    # veh_width(offline_params.yaml) 나 min_safety_margin 을 바꾸면 이 값도 같이 봐야 한다.
+    lateral_width_ot_m: 0.17 # -> NOW DYNAMIC RECONFIGURABLE
+    # splini_hyst_timer_sec: 0.2 # [s] time we have to wait between switching from overtaking on one side to the other -> NOW DYNAMIC RECONFIGURABLE
+    splini_hyst_timer_sec: 0.4
+
+    ftg_threshold_speed: 0.1 # [m/s] speed threshold below which we start a timer for activating FTG
+    ftg_timer_sec: 3. # [s] time we have to stay slower than the `ftg_threshold_speed` threshold before we activate FTG
+
+    Trailing_to_GBtrack_counting_threshold: 0 # [count] number of consecutive times we have to see gb_free to switch from TRAILING to GB_TRACK (0~500) -> 40hz 일때 count 40개당 1초
+
+    # 회피 궤적(TRAILING / OVERTAKE)의 속도 상한을 거는 접지 한계.
+    # 회피선은 레이싱라인보다 훨씬 굽어 있어서 전역 속도를 그대로 쓰면 필요 횡가속도가
+    # 접지 한계를 몇 배 넘어간다 -> 차가 못 돌고 직진해서 장애물을 들이받는다(고속 직선에서 특히).
+    #   v <= sqrt(ay_max / |kappa|) 로 제한하고, ax_max 로 미리 감속한다.
+    # offline_params.yaml 의 ax_max / ay_max 와 같은 값으로 유지할 것.
+    # 실차에서 회피 중 밀리면(언더스티어) ay_max 를 낮춰라. mu 1.0 기준값이라 낙관적이다.
+    ay_max_mps2: 5.4 # [m/s^2] 최대 횡가속도
+    ax_max_mps2: 3.8 # [m/s^2] 최대 종가속도(감속)
+
+    # ---- 고속 회피 감속 강화 (2026-08-04 신규) --------------------------------
+    # 회피 궤적(TRAILING/OVERTAKE)의 속도에 곱하는 '추가' 배율을 현재 속도에 따라 바꾼다.
+    # 왜 필요한가: obs_debug_0804_1657 실측에서 5 m/s 이상일 때 장애물이 평균 3.72 m
+    # 앞에서야 확정된다(충돌까지 0.7초). 제동 지연 0.2초를 빼면 실제 감속 구간은 0.5초뿐이라
+    # 초반에 최대한 속도를 깎아야 그 뒤 횡방향으로 비킬 시간이 남는다.
+    # 저속에서는 이미 잘 피하므로 건드리면 손해다 -> v_lo 이하에서는 정확히 1.0 이 되도록 설계.
+    #
+    #   cur_vs <= hs_brake_v_lo          -> 배율 1.0        (기존 거동 그대로)
+    #   cur_vs >= hs_brake_v_hi          -> 배율 hs_brake_factor
+    #   그 사이                           -> 선형 보간
+    #
+    # 기능을 끄려면 hs_brake_factor 를 1.0 으로 두면 된다(계산 자체를 건너뛴다).
+    # 최종 명령속도 = 전역속도 x (상태별 배율: TRAILING 1.0 / OVERTAKE 0.8) x 이 배율,
+    # 그 뒤 곡률한계(ay_max)와 역방향 감속패스(ax_max)가 추가로 걸린다.
+    #
+    # 2026-08-04 obs_debug_0804_2015 검증 결과 (factor 0.6 으로 주행):
+    #   회피 상태(TRAILING/OVERTAKE)에서 로컬목표/전역속도 비 =
+    #     0~2 m/s 0.88 / 2~3 m/s 0.77 / 3~4 m/s 0.68 / 4~5 m/s 0.76
+    #   -> 속도가 오를수록 비가 낮아지므로 **로직은 정상 동작 중**이다.
+    #   제동 권한도 충분하다: >4.5 m/s 에서 감속 요구 시 1초 뒤 실제 -2.32 m/s.
+    #   그런데 5 m/s 이상 구간의 상태는 GB_TRACK 100% 였다. 즉 그 속도대에서는
+    #   애초에 회피 상태로 들어가지 않아 이 배율이 발동할 기회조차 없다.
+    #   -> 남은 개선 여지는 3~5 m/s 구간을 더 깊게 깎는 것이라 factor 를 0.6 -> 0.45.
+    hs_brake_v_lo: 2.5     # [m/s] 이 속도 이하에서는 감속 강화 없음
+    hs_brake_v_hi: 3.5     # [m/s] 이 속도 이상에서는 hs_brake_factor 를 그대로 적용
+    hs_brake_factor: 0.45  # [-] 고속에서 곱할 배율 (1.0 = 비활성). 이전값 0.6
+

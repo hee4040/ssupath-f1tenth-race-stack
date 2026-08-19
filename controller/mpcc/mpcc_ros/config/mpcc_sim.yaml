@@ -1,0 +1,15 @@
+mpcc_node:
+  ros__parameters:
+    # JSON 설정 파일 경로
+    config_file: "/home/misys/forza_ws/race_stack/controller/mpcc/MPCC/C++/Params/config_teras.json"
+
+    # 제어 루프 주기 (Hz)
+    loop_late_hz_: 40.0
+
+    # Corridor 사용 조건 (s 차이 threshold)
+    corridor_s_threshold: 0.5
+
+    # 초기 상태 (x, y, yaw, vx, vy, yaw rate, s, D, delta, vs)
+    x0: [2.0, 0.0, 0.0,
+         2.0, 0.0, 0.0, 
+         0.0, 0.0, 0.0, 2.0]

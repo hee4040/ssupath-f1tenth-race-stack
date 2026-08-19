@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>cluster_to_obstacle_cpp</name>
+  <version>0.0.1</version>
+  <description>Convert clustered objects to obstacle messages using Frenet conversion (C++ version).</description>
+
+  <maintainer email="you@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build tool -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Core ROS 2 deps -->
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>visualization_msgs</depend>
+
+  <!-- TF deps -->
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- Message packages -->
+  <depend>tier4_perception_msgs</depend>
+  <depend>f110_msgs</depend>
+
+  <!-- Frenet converter (패키지명: frenet_conversion_cpp) -->
+  <depend>frenet_conversion_cpp</depend>
+
+  <!-- 런치 사용 시 권장 -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- Optional test deps -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

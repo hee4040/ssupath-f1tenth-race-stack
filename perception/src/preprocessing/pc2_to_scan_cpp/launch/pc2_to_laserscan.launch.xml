@@ -1,0 +1,13 @@
+<launch>
+  <!-- <arg name="pc_topic" default="/passthrough/lidar"/> -->
+  <arg name="pc_topic" default="/ground_segmentation/lidar"/>
+  <arg name="scan_topic" default="/scan"/>
+  <arg name="pc2_to_scan_node_param_file" default="$(find-pkg-share pc2_to_scan_cpp)/config/pc2_to_scan_node.param.yaml"/>
+  <node pkg="pc2_to_scan_cpp" exec="pc2_to_laserscan" name="pc2_to_laserscan" output="screen">
+    <param name="pc_topic" value="$(var pc_topic)"/>
+    <param name="scan_topic" value="$(var scan_topic)"/>
+     <!-- -135 deg -->
+    <param name="use_closest_point" value="true"/>
+    <param from="$(var pc2_to_scan_node_param_file)" />
+  </node>
+</launch>

@@ -1,0 +1,111 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# macos
+.DS_Store
+
+# py
+*.pyc
+
+#vscode
+.vscode
+
+#maps
+#stack_master/maps/*
+#!stack_master/maps/GLC_smile_small
+#stack_master/maps/GLC_smile_small/speed_scaling.yaml
+#stack_master/maps/GLC_smile_small/ot_sectors.yaml
+#!stack_master/maps/hangar_1905_v0
+#stack_master/maps/hangar_1905_v0/speed_scaling.yaml
+#stack_master/maps/hangar_1905_v0/ot_sectors.yaml
+
+#todo: what's up with maps -> external map folder?
+.vscode/build
+.vscode/log
+.vscode/c_cpp_properties.json
+
+build/
+install/
+log/
+data_bag/
+teras_bag/
+teras_head_to_head/
+0820_pp_bag/
+0820_pp_bag_orig/
+*.db3
+0820_pp_bag/
+0820_pp_bag_orig/
+SE_teras/
+data_bag/
+teras_bag/
+teras_head_to_head/
+*.db3
+
+# ---------------------------------------------------------------------------
+# ssupath 추가분 (2026-08)
+# ---------------------------------------------------------------------------
+
+# python 캐시
+__pycache__/
+
+# colcon 백업 워크스페이스 (state_estimation/{build,install,log}.bak_0727_2007 등)
+build.bak*/
+install.bak*/
+log.bak*/
+*.bak_20*
+*.bak
+
+# 코드 백업 스냅샷 (3D_Detection_backup_*, perception_backup_*)
+*_backup_20*/
+
+# rosbag / 디버그 녹화 — 레포 루트에 있는 것만. 앞의 '/' 가 핵심:
+# stack_master/maps/lobby_0730 같은 '맵' 디렉토리는 살려야 하기 때문.
+/lobby_07*/
+/lobby_08*/
+/obs_debug_*/
+/loc_debug_*/
+/record/
+
+# 런타임 산출물 (레포 루트)
+/map.pcd
+/map_*.pcd
+/*.ply
+/pose_graph.g2o
+
+# ---------------------------------------------------------------------------
+# 위 *.a / *.so 규칙의 예외
+# 아래 정적 라이브러리들은 ROS 빌드가 자동 생성해주지 않는 외부 의존성이라
+# 레포에 포함해야 새 환경에서 바로 빌드된다.
+# ---------------------------------------------------------------------------
+!controller/mpcc/MPCC/C++/External/**/*.a
+!state_estimation/src/fast_gicp/thirdparty/**/*.a

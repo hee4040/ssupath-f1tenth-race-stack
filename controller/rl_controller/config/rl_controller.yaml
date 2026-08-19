@@ -1,0 +1,106 @@
+rl_controller:
+  ros__parameters:
+    # ---------------- 정책 ---------------- #
+    # 학습 코드는 한 환경에 두 대를 태워 동시에 학습한다:
+    #   car_a = cvar.pt (보수적, 스파링 상대 역할 + 속도 핸디캡)
+    #   car_b = pow.pt  (공격적, **실차 배포 대상** — env_cfg.v_cap_a_range 주석)
+    # 따라서 실차 주행 가중치는 pow.pt 다.
+    #
+    # 경로는 절대경로면 그대로, 아니면 이 패키지의 models/ 기준으로 해석된다.
+    # 가중치는 레포 안에 복사돼 있으므로 학습 워크스페이스(~/shared_dir)가 없어도 된다.
+    # models/ 에는 최신 런(20260810)의 두 개만 둔다:
+    #   pow.pt   <- 현재 기본 (학습 car_b = 실차 배포 대상)
+    #   cvar.pt  <- 같은 런의 보수적 정책 (헤어핀에서 더 안전하게 갈 때)
+    checkpoint: "pow.pt"
+    # 젯슨의 pip torch(2.11)는 이 GPU(sm_87) 커널이 없어 cuda 실행이 실패한다.
+    # CPU 추론이 1스텝 ~4ms 라 30Hz 에 충분하므로 cpu 고정. (auto = 실제 커널 실행
+    # 테스트 후 실패하면 cpu 로 폴백)
+    device: "cpu"
+    torch_threads: 1
+    policy_seed: 0
+    # 학습 기본값 1 (디퓨전 샘플 1개를 그대로 사용). >1 로 두면 QVN(CVaR) 으로
+    # 후보 중 최선을 고른다 — 안정성이 조금 오르는 대신 추론 시간이 배로 는다.
+    num_action_candidates: 1
+    explore_noise_std: 0.0
+
+    # ---------------- 명령 ---------------- #
+    control_rate: 30.0          # 학습 제어 주기(decimation 4 @ 120Hz)와 동일하게 유지
+    v_max: 5.0                  # launch 인자 v_max 로 덮어씀
+    v_min: 1.0                  # 학습 RacingCfg.v_min — 정책이 완전 정지를 학습하지 않았다
+    obs_v_max: 10.0             # 학습 관측 정규화 상수. 절대 바꾸지 말 것
+    max_steering_angle: 0.42    # 학습 RacingCfg.max_steering_angle (기계한계 0.44)
+    # scale: 행동 -1..+1 을 v_min..v_max 로 선형 매핑 (학습 속도 커리큘럼과 동형)
+    # clip : 학습 그대로 v_min..obs_v_max 로 매핑한 뒤 v_max 로 자름
+    speed_mode: "scale"
+
+    # ---------------- 스캔 (학습 관측과 동일 포맷) ---------------- #
+    n_beams: 32
+    scan_fov: 2.356             # 전방 ±135도
+    scan_max_range: 10.0
+    # base_link 기준 높이 밴드. lobby_0728 bag 실측: 지면 z≈-0.05m, 덕트 벽 z 0~0.3m,
+    # 자차 상부 구조물 z>0.3m. 벽 높이가 다른 코스에서는 여기를 조정할 것
+    # (scripts/check_rl_setup.py --bag 로 밴드별 스캔 통계를 볼 수 있다).
+    scan_z_min: 0.02
+    scan_z_max: 0.30
+    scan_min_range: 0.05
+    # 자차 반사 제외 박스 [x_min, x_max, |y|] (base_link). 실측상 원점 부근
+    # (수평거리 0.05~0.15m)에 전장품 반사가 상시 잡힌다.
+    self_box: [-0.40, 0.55, 0.20]
+    # 점별 타임스탬프로 스윕 왜곡 + 지연을 보상 (100ms 스윕, 5m/s 면 0.5m 왜곡)
+    scan_deskew: true
+    lidar_frame: "livox_frame"
+    lidar_translation: [0.27, 0.0, 0.07]   # localization.launch.py 의 static TF 와 동일
+    lidar_yaw: 1.5707963
+
+    # ---------------- 트랙 관측 ---------------- #
+    # 중심선 인덱스 오프셋 (ds=0.15m -> 0.75/2.25/4.5/9/13.5m). 학습값 고정
+    curv_lookahead: [5, 15, 30, 60, 90]
+    # 곡률 관측 클립. 학습 20260805 세대부터 ±1 -> ±2 로 넓어졌고 지금도 ±2 다.
+    # (racing_env._observe_car: 대회 코스는 |kappa| 가 1.93(R 0.52m)까지 가는데
+    #  ±1 클립이 1.0 이상을 전부 1.0 으로 뭉개 '급코너 vs 아주 급한 코너'를
+    #  정책이 구분하지 못했다 — 헤어핀 대응 실패의 한 축)
+    # ★ ±1 세대 체크포인트를 다시 실을 일이 있으면 이 값을 1.0 으로 되돌릴 것.
+    curv_clip: 2.0
+    hw_ref: 2.5                 # 학습 0.5 * TrackParams.width_max(5.0)
+    yawrate_norm: 4.0
+    vy_norm: 3.0
+    act_hist_len: 2
+
+    # ---------------- 상대차량 관측 (obs[51:56]) ---------------- #
+    # 학습에서 장애물과 상대차는 서로 다른 채널이다:
+    #   장애물(맵에 없는 ≤50cm 물체) -> 32빔 스캔에만 나타난다. 실차에서도 Livox
+    #     원본 클라우드에 물리적으로 잡히므로 별도 인지 모듈이 필요 없다.
+    #   상대차 -> 스캔에도 잡히고, 추가로 아래 5개 특징으로 명시적으로 들어간다.
+    # 그래서 perception 의 tracking 노드 출력 중 '동적'(is_static=False)으로
+    # 분류된 것만 골라 쓴다. 정적 장애물을 여기 넣으면 학습 분포와 어긋난다.
+    # perception 체인이 안 떠 있으면 (기존 time_trials_launch) 자동으로 전부 0 =
+    # 학습의 '상대차 미검출' 상태와 같으므로 그대로 두어도 안전하다.
+    opponent_enabled: true
+    opponent_topic: "/perception/obstacles"
+    global_wpnt_topic: "/global_waypoints"   # tracking 의 s/d 기준선(레이스라인)
+    opp_timeout: 0.4            # 이보다 오래 갱신 없으면 미검출(0)로 되돌림
+    opp_min_speed: 0.3          # 이보다 느린 '동적' 물체는 유령으로 보고 무시
+    opp_require_dynamic: true   # false 로 두면 정적 장애물까지 상대차로 취급(비권장)
+    opp_gap_norm: 10.0          # 학습 gap_s 정규화 상수. 바꾸지 말 것
+    # 감지 박스 보정 [m] (학습 env_cfg.det_box_rear 와 같은 값).
+    # 대회 규정: 각 차량 뒷부분에 12x12cm 감지 박스를 지면 10~30cm 높이에 단다.
+    # 그 높이 밴드에서 LiDAR 에 잡히는 건 이 박스뿐이라(섀시 축고 6cm 는 밴드 아래)
+    # perception 이 주는 위치 = 박스 중심 = 차중심에서 뒤로 0.20m.
+    # 학습 관측은 차중심 기준이므로 상대차 헤딩 방향으로 되돌린다.
+    # ★ 상대차에 박스가 안 달려 있으면(연습 주행 등) 0.0 으로 둘 것.
+    opp_det_box_rear: 0.20
+
+    # ---------------- 토픽 ---------------- #
+    odom_topic: "/car_state/odom"
+    centerline_topic: "/centerline_waypoints"
+    lidar_topic: "/livox/lidar"
+    laserscan_topic: "/scan"
+    scan_source: "cloud"        # cloud(실차 Livox) | laserscan(시뮬)
+    imu_topic: "/sensors/imu/raw"
+    yawrate_source: "auto"      # auto | odom | imu
+    drive_topic: "/l1controller/control"
+
+    # ---------------- 안전 ---------------- #
+    odom_timeout: 0.2           # 측위가 이보다 오래 끊기면 정지 명령
+    scan_timeout: 0.5           # 라이다가 이보다 오래 끊기면 정지 명령
+    publish_debug: true         # /rl_controller/scan (LaserScan), /rl_controller/obs

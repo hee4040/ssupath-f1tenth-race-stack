@@ -1,0 +1,17 @@
+/**:
+  ros__parameters: #이 파라미터파일 사용중
+      min_x: -0.01
+      max_x: 0.01
+      min_y: -0.01
+      max_y: 0.01
+      use_vehicle_footprint: false
+      general_max_slope: 8.0                    # 6~7이 정배  2 (여기부터 사용하는 값들 연속한 포인트 간의 각도 차이)
+      local_max_slope: 6.0                      # 2~3이 정배  5 10
+      initial_max_slope: 3.0                    # 1이 정배 1 5  8 11
+      radial_divider_angle: 1.0
+      min_height_threshold: 0.02              # 연속한 포인트 간의 높이차이(z 축) 너무 많은 포인트가 잘린다 싶으면 0.15까지는 ㄱㅊ
+      concentric_divider_distance: 0.0
+      reclass_distance_threshold: 0.1
+
+      # debug parameters
+      publish_processing_time_detail: false
