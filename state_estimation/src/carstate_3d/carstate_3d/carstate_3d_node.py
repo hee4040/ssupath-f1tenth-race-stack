@@ -28,6 +28,8 @@ class Carstate3D(Node):
         self.declare_parameter('vy_ma_len', 10)          # 이동평균 길이
         self.declare_parameter('vy_max_dt', 0.2)         # dt 상한(초) - 너무 길면 스킵
         self.declare_parameter('min_speed_for_vy', 0.0005) # 아주 느릴 때 vy 계산 스킵(m/s)
+        # vy 유지 상한(초). 아래 '### vy 유지' 참조. 0 = 끔(구 동작 = vy 가 0 으로 죽음)
+        self.declare_parameter('vy_hold_max_age', 0.1)
 
         self.ekf_odom_topic = self.get_parameter('ekf_odom_topic').value
         self.ekf_pose_topic = self.get_parameter('ekf_pose_topic').value
@@ -40,6 +42,7 @@ class Carstate3D(Node):
         self.vy_ma_len = int(self.get_parameter('vy_ma_len').value)
         self.vy_max_dt = float(self.get_parameter('vy_max_dt').value)
         self.min_speed_for_vy = float(self.get_parameter('min_speed_for_vy').value)
+        self.vy_hold_max_age = float(self.get_parameter('vy_hold_max_age').value)
 
         # Subs & pubs
         self.ekf_odom: Optional[Odometry] = None
@@ -68,6 +71,8 @@ class Carstate3D(Node):
         self._vy_buf = np.zeros(max(1, self.vy_ma_len), dtype=float)  # 이동평균 버퍼
         self._vy_idx = 0
         self._vy_count = 0  # 버퍼에 실제로 들어간 샘플 수
+        self._vy_last = None      # 마지막으로 '계산에 성공한' vy 와 그 시각 (### vy 유지)
+        self._vy_last_t = None
 
         # self.timer = self.create_timer(1/80.0, self.timer_cb)
         self.timer = self.create_timer(1/40.0, self.timer_cb)
@@ -139,6 +144,21 @@ class Carstate3D(Node):
 
         # 현재 pose/time을 last로 저장
         self._last_x, self._last_y, self._last_t = x, y, t
+
+        # ### vy 유지 (2026-08-18 수정 복원 / 2026-08-19 재적용)
+        # /ekf_odom 은 100Hz 로 발행되지만 고유 스탬프는 50Hz 다 — 같은 스탬프가 두 번 온다.
+        # 두 번째 메시지는 dt == 0 이라 위 차분이 통째로 스킵되고, 그러면 아래 주입 정책도
+        # 건너뛰어 EKF 원본 vy(= 사실상 0)가 그대로 나간다.
+        # 실측(학습 레포 env_cfg.vy_dropout_p 주석): 30Hz 제어주기에서 62.2% 가 정확히 0
+        # = 횡속도 채널이 사실상 죽어 있었다. RL 컨트롤러 관측의 vy 채널이 여기 물려 있다.
+        # -> 새로 계산하지 못한 스텝은 직전 값을 유지한다. 무한정 물고 있으면 정지 후에도
+        #    옛 vy 가 남으므로 vy_hold_max_age(기본 0.1s = 스탬프 5주기)로 끊는다.
+        if vy_est is not None:
+            self._vy_last, self._vy_last_t = vy_est, t
+        elif (self.vy_hold_max_age > 0.0 and self._vy_last is not None
+              and self._vy_last_t is not None
+              and 0.0 <= (t - self._vy_last_t) <= self.vy_hold_max_age):
+            vy_est = self._vy_last
 
         # --- 주입 정책 ---
         if vy_est is not None:

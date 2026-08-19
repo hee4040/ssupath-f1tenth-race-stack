@@ -11,7 +11,7 @@
     # NDT는 고정 맵에 매 프레임 독립 정합이라 거리 스케일 오차가 생길 수 없으므로 휠 쪽이 틀렸다.
     # 이 값은 ackermann_to_vesc(명령 m/s -> ERPM)와 vesc_to_odom(ERPM -> m/s) 양쪽이 함께 쓴다.
     # 확정 검증법: 직선 5m를 줄자로 재고 /odom 이동거리와 비교(21%면 odom이 약 4m로 나옴).
-    speed_to_erpm_gain: 3457.0
+    speed_to_erpm_gain: 3576.0
     speed_to_erpm_offset: 0.0
 
     # servo value (0 to 1) =  steering_angle_to_servo_gain * steering angle (radians) + steering_angle_to_servo_offset

@@ -12,8 +12,12 @@ from __future__ import annotations
 import os
 
 # 배포 기본 가중치. 학습 car_b(pow) 가 실차 배포 대상이다 (models/README.md 참조).
-# models/ 에는 최신 런의 pow.pt / cvar.pt 두 개만 둔다 (날짜 폴더를 두지 않는다).
-DEFAULT_CKPT = "pow.pt"
+# ★2026-08-19: *_healthy.pt 로 바꿨다. 학습 train.py 는 Pow 의 조향 다양성 pstd 가
+#   붕괴 기준(0.02) 위인 동안만 *_healthy.pt 를 갱신한다 — 런 최종 pow.pt 는 붕괴
+#   영역(pstd 0.013~0.018)이라 배포하면 안 된다.
+# models/ 에는 배포 대상 두 개만 평평하게 둔다 (setup.py 가 models/*.pt 만 설치하므로
+# 날짜 폴더 안의 파일은 install 공간에 들어가지 않는다).
+DEFAULT_CKPT = "pow_healthy.pt"
 
 
 def models_roots() -> list:

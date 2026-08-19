@@ -80,7 +80,7 @@ def describe_track(tr) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     # 상대경로면 패키지의 models/ 기준으로 해석된다 (노드와 동일 규칙).
-    ap.add_argument("--checkpoint", default="pow.pt")
+    ap.add_argument("--checkpoint", default="pow_healthy.pt")
     ap.add_argument("--map", default="", help="stack_master/maps/<name> 폴더")
     ap.add_argument("--bag", default="", help="rosbag2 폴더 (/livox/lidar 포함)")
     ap.add_argument("--z-bands", default="0.02:0.30,0.00:0.35,0.05:0.25",
@@ -91,9 +91,10 @@ def main() -> int:
     ap.add_argument("--rollout-speeds", default="2.0,3.0,5.0")
     ap.add_argument("--rollout-starts", type=int, default=6)
     ap.add_argument("--rollout-seconds", type=float, default=30.0)
-    # 기본은 학습 공칭 마찰(offline_sim.MU_NOM). 학습이 μ 를 크게 올려 놨으므로
-    # (0.75 -> 1.05, 밴드 0.85~1.25) '실제 도막이 그보다 낮으면?' 을 반드시 같이 볼 것.
-    # 예: --mu 0.65 로 돌려 완주율이 무너지면 그 정책은 실차에서 위험하다.
+    # 기본은 학습 공칭 마찰(offline_sim.MU_NOM=1.05). 2026-08-18 실차 실측으로 학습
+    # mu_range 가 (0.85,1.25) -> (0.75,1.10) 으로 재수축돼, 공칭 1.05 는 이제 실측
+    # 밴드(실 노면 ~0.85~1.07)의 '상단'이다. 반드시 하단에서도 같이 볼 것.
+    # 예: --mu 0.85 (실측 하단) / --mu 0.75 (학습 밴드 하한). 완주율이 무너지면 위험하다.
     ap.add_argument("--mu", type=float, default=None,
                     help="폐루프 시뮬 지면 마찰 (기본: 학습 공칭값). 낮춰서 sim2real 여유 확인")
     args = ap.parse_args()

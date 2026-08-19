@@ -10,7 +10,7 @@
 동역학은 dacerpp_lab/racing_env.py 의 `_apply_tire_forces` / `_drive_one` 을 그대로
 옮긴 것이다(같은 수식, 물리 120Hz / 제어 30Hz). PhysX 강체 대신 평면 3자유도
 (vx, vy, r)를 적분하고 전복/충돌은 다루지 않는다. 관성 Izz 는 학습 자산의
-assets/f1tenth/f1tenth.urdf 링크 관성 합(≈0.084).
+assets/f1tenth/f1tenth.urdf 링크 관성 합(≈0.1064, 2026-08-18 재계측 기준).
 
 ★ 순수 운동학 자전거 모델을 쓰면 안 된다: 그립 한계가 없어 풀락에서 요레이트가
   5.7rad/s(그립 한계 ~3.4의 1.7배)까지 나오고, 학습 분포 밖 관측이 되어 정책이
@@ -24,27 +24,47 @@ from typing import Optional, Sequence
 import numpy as np
 
 # ---- 학습 파라미터 (dacerpp_lab/env_cfg.py TireModelCfg / RacingCfg) ----
+# ★2026-08-19 동기화: 학습 레포(dacerpp-isaaclab @128d8dc)의 2026-08-18 실차 재계측을
+#   그대로 옮겼다. 그 전까지 이 파일은 두 세대 뒤처져 있었다 (MASS 3.94 = 2026-07-16
+#   코너웨이트, 학습은 4.24(0812) -> 4.987(0818)로 두 번 바뀌었다). 즉 검증기가 실차보다
+#   27% 가벼운 차를 돌리고 있었다 — 완주하던 롤아웃이 실차에서 안 도는 방향의 오차다.
+#
 # 공칭 마찰. 학습 TireModelCfg.mu 와 같은 값을 쓴다 — 이 값이 학습과 다르면
 # "정책이 자기 세계에서 도는가"라는 질문 자체가 성립하지 않는다.
 # 이력: 0.75 -> 0.90(2026-08-07) -> 1.05(2026-08-09). 실차가 코너에서 바깥벽에
-# 붙는 과보수 주행을 그립 부족 인식으로 보고 학습 그립을 올린 실험이다
-# (학습 mu_range 0.85~1.25).
-# ★ 학습 주석의 경고 그대로: 실제 도막 그립이 이보다 낮으면 정책이 그립을
-#   과대평가해 언더스티어가 재발할 수 있다. check_rl_setup.py --mu 로 낮은 마찰에서도
-#   돌려 보고, 현장 스키드패드 실측이 나오면 이 값을 그 값으로 고칠 것.
+# 붙는 과보수 주행을 그립 부족 인식으로 보고 학습 그립을 올린 실험이다.
+# ★ 학습 mu_range 는 2026-08-18 실차 실측으로 재수축됐다 ((0.85,1.25) -> (0.75,1.10),
+#   중앙 0.925). 실측 근거는 두 독립 경로가 일치: 횡가속 p99 7.92m/s^2 -> mu>=0.81,
+#   지속가속 6.08m/s^2 를 이 모델이 내려면 mu=0.98. 즉 실 노면 mu ~= 0.85~1.07.
+#   TireModelCfg.mu(공칭)는 1.05 그대로라 여기도 1.05 를 유지하지만, 이제 그 값은
+#   실측 밴드의 '상단'이다 -> check_rl_setup.py --mu 0.85 (하단)로도 반드시 돌려 볼 것.
 MU_NOM, ALPHA_CHAR = 1.05, 0.08
-MASS, COM_H, LF, LR = 3.94, 0.07, 0.149, 0.181
-K_DRIVE, F_DRIVE_MAX, C_ROLL, V_LAT_TAPER = 40.0, 22.0, 0.015, 0.3
-IZZ, G = 0.084, 9.81
+# 코너웨이트 실측(2026-08-18, 배터리 장착 주행 상태): 총 4987g, 앞 2408(48.3%) / 뒤 2579(51.7%).
+# lf = L x 뒤축하중비, lr = L x 앞축하중비 -> CoM 이 축거 중앙보다 5.7mm 뒤다(구 값은 앞).
+MASS, COM_H, LF, LR = 4.987, 0.07, 0.171, 0.159
+# 구동력 실측(2026-08-18 bag loc_debug_0817_2326): 지속가속 p50 6.08m/s^2 @2~5m/s ->
+#   F = m*(a + c_roll*g) = 4.987*(6.08+0.147) = 31.1N.
+# ★제동은 구동과 분리한다(학습 racing_env 도 2026-08-18 에 분리). 실측 제동은 구동의
+#   절반(지속 ~3.0m/s^2) — VESC 속도서보가 강한 역토크를 안 건다. 대칭 clamp 를 쓰면
+#   검증기가 실차의 2배로 서서 '늦게 밟아도 되는' 오판을 준다.
+#   F = m*(a - c_roll*g) = 4.987*(3.00-0.147) = 14.2N (구름저항이 제동을 돕는다).
+K_DRIVE, F_DRIVE_MAX, F_BRAKE_MAX = 40.0, 31.1, 14.2
+C_ROLL, V_LAT_TAPER = 0.015, 0.3
+# Izz: f1tenth.urdf 링크 관성 합(base 0.083920 + 바퀴/너클 평행축), CoM(x=-0.006) 기준.
+IZZ, G = 0.1064, 9.81
 MAX_STEER, STEER_LIMIT, STEER_K, STEER_VLIM = 0.42, 0.44, 10.0, 20.0
 PHYS_DT, DECIMATION = 1.0 / 120.0, 4
 CTRL_DT = PHYS_DT * DECIMATION
 N_BEAMS, FOV, RMAX = 32, 2.356, 10.0
 HW_REF, OBS_VMAX, V_MIN = 2.5, 10.0, 1.0
-CURV_OFF = (5, 15, 30, 60, 90)
+# ★ 이 두 개는 '관측 포맷'이라 **지금 실린 체크포인트**와 반드시 세트여야 한다.
+#   2026-08-19: obs_dim=60 세대(20260818_* 런)로 올렸다 — 전방 예견에 120(18m)이
+#   추가되고(58->60) 곡률 클립이 ±3 으로 넓어졌다. run_config.json 의
+#   curv_lookahead / curv_clip 과 일치한다. config/rl_controller.yaml 도 같은 값.
+#   ★ 구 obs_dim=58 체크포인트를 다시 실으려면 (5,15,30,60,90) / 2.0 으로 되돌릴 것.
+CURV_OFF = (5, 15, 30, 60, 90, 120)
 WIDTH_OFF = (0,) + CURV_OFF
-# 곡률 관측 클립. 20260805 세대 학습부터 ±2 (config 의 curv_clip 과 같은 값을 유지할 것).
-CURV_CLIP = 2.0
+CURV_CLIP = 3.0
 OFFTRACK_MARGIN, SPIN_HERR = -0.20, 1.745
 ANGLES = np.linspace(-FOV, FOV, N_BEAMS)
 
@@ -73,7 +93,7 @@ class CarSim:
         delta, vx, vy, r = self.delta, self.vx, self.vy, self.r
         L = LF + LR
 
-        fx_des = float(np.clip(K_DRIVE * (v_cmd - vx), -F_DRIVE_MAX, F_DRIVE_MAX))
+        fx_des = float(np.clip(K_DRIVE * (v_cmd - vx), -F_BRAKE_MAX, F_DRIVE_MAX))
         ax_est = fx_des / MASS
         nf = max(MASS * G * LR / L - MASS * ax_est * COM_H / L, 0.0)
         nr = max(MASS * G * LF / L + MASS * ax_est * COM_H / L, 0.0)

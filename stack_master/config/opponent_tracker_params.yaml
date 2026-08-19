@@ -104,7 +104,7 @@ tracking:
     # 3.0 은 p90 아래라 긴 끊김(상위 10%)에서는 진짜 장애물도 놓아준다 —
     # 치웠을 때 빨리 출발하는 것을 우선한 값이다(2026-08-19, 실차 체감 기준).
     # 0 이하로 두면 이 해제를 끈다(지나가기 전엔 절대 안 지워짐 — 실차에서 권장 안 함).
-    latch_max_hold: 3.0
+    latch_max_hold: 0.5
 
     # ★ 교착 방지 하드 캡 [s]. 가시성 판정(inFOV)과 **무관하게** 이만큼 재검출이 없으면 해제.
     #
@@ -125,4 +125,4 @@ tracking:
     #
     # ※ 반드시 latch_hard_release >= latch_max_hold 를 지킬 것. 반대로 두면 하드 캡이
     #   항상 먼저 터져서 latch_max_hold 가 죽은 값이 되고, 가시성 확인이 무의미해진다.
-    latch_hard_release: 7.0
+    latch_hard_release: 1.0
