@@ -72,6 +72,14 @@ public:
   double trailing_gap, trailing_p_gain, trailing_i_gain, trailing_d_gain, blind_trailing_speed, trailing_to_gbtrack_speed_scale, curvature_scale, ok_thresh, hard_thresh, min_scale, steer_rate_thresh;
   double loop_rate, wheelbase;
 
+  // ---- 정지 복구(후진) 파라미터 ------------------------------------------
+  // state == "StateType.RECOVER" 일 때만 쓰인다. 생성자 인자를 늘리지 않고
+  // l1_controller 가 생성 후에 YAML 값으로 덮어쓴다(동적 파라미터 갱신과 같은 방식).
+  double reverse_l1_dist{0.7};      // [m] 후방 lookahead 거리
+  double reverse_speed_max{0.5};    // [m/s] 후진 속도 크기 상한 (안전장치)
+  double reverse_steer_max{0.32};   // [rad] 후진 중 조향각 상한
+  int    reverse_stale_cycles{20};  // 로컬 웨이포인트가 이만큼 갱신 안 되면 정지
+
   // 상태 플래그 (원본 코드와 호환)
   bool flag1{false};
 
@@ -125,6 +133,8 @@ private:
   double speed_steer_scaling(double steer, double speed) const;
 
   double trailing_controller(double global_speed);
+
+  Output reverse_loop();
 
   std::pair<Vec2,double> calc_L1_point(double lateral_error);
   double calc_steering_angle(const Vec2& L1_point, double L1_distance,

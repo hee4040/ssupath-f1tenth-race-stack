@@ -76,6 +76,12 @@ PP_Controller::main_loop(const std::string& state,
   acc_now_       = acc_now;
   track_length_  = track_length;
 
+  // 정지 복구(후진). 아래 전진 로직은 전부 전진 전제(속도 하한 0, lookahead 는 항상 앞쪽,
+  // 조향 부호도 전진 기준)라 그대로는 후진에 쓸 수 없다. 그래서 별도 경로로 빠진다.
+  if (state_ == "StateType.RECOVER") {
+    return reverse_loop();
+  }
+
   // PREPROCESS
   const double yaw = pose_[2];
   const Vec2 v{ std::cos(yaw)*speed_now_, std::sin(yaw)*speed_now_ };
@@ -229,6 +235,68 @@ double PP_Controller::trailing_controller(double global_speed) {
     trailing_command_ = std::max(blind_trailing_speed, trailing_command_);
   }
   return trailing_command_;
+}
+
+PP_Controller::Output PP_Controller::reverse_loop() {
+  // 후진 pure pursuit.
+  //
+  // 상태머신(states.Recovering)이 보내는 wp_ 는 '차에서 가장 가까운 중심선 점 -> 뒤쪽'
+  // 순서이고 vx 가 음수다. 따라서 인덱스를 키우면 차 뒤쪽으로 간다.
+  //
+  // 조향은 헤딩을 180도 돌린 가상의 전진 문제로 풀고 부호를 뒤집는다:
+  //     r     = (-cos yaw, -sin yaw)                 (후진 진행 방향)
+  //     alpha = atan2(r x L1_vec, r . L1_vec)        (후진 방향 기준 목표점 각도)
+  //     delta = -atan(2 * L * sin(alpha) / |L1_vec|)
+  // 부호 검산: yaw=0 에서 목표점이 (-1, +0.3) 이면 alpha<0 -> delta>0 (좌조향).
+  // 후진 중 좌조향이면 요레이트가 음수라 차 뒤쪽이 +y 로 간다 -> 목표점 쪽. 맞다.
+  const Vec2 here{ pose_[0], pose_[1] };
+
+  if (wp_.empty()) {
+    logger_warn("[PP] RECOVER: 로컬 웨이포인트가 비어 있어 정지");
+    curr_steering_angle_ = 0.0;
+    return {0.0, 0.0, 0.0, 0.0, here, 0.0, -1};
+  }
+
+  idx_nearest_wp_ = nearest_waypoint(here, wp_);
+  if (idx_nearest_wp_ < 0) idx_nearest_wp_ = 0;
+
+  // 후방 lookahead 점. 배열 간격은 중심선 간격(0.1 m)이다.
+  const double waypoints_distance = 0.1;
+  const int d_index = static_cast<int>(clip(reverse_l1_dist, 0.2, 3.0)/waypoints_distance + 0.5);
+  const int idx_la  = std::min((int)wp_.size()-1, idx_nearest_wp_ + d_index);
+  const Vec2 L1_point{ wp_[idx_la][0], wp_[idx_la][1] };
+
+  const double yaw = pose_[2];
+  const Vec2 L1_vec{ L1_point[0] - here[0], L1_point[1] - here[1] };
+  const double L1_norm = std::hypot(L1_vec[0], L1_vec[1]);
+
+  double steer = 0.0;
+  if (L1_norm > 1e-6) {
+    const double rx = -std::cos(yaw), ry = -std::sin(yaw);
+    const double along = rx*L1_vec[0] + ry*L1_vec[1];
+    const double lat   = rx*L1_vec[1] - ry*L1_vec[0];
+    if (along <= 0.0) {
+      // 목표점이 차 앞쪽이다 = 웨이포인트 순서가 뒤집혔거나 차가 돌아버린 것.
+      // 억지로 조향하면 엉뚱한 데로 가므로 직진 후진으로 버틴다(상태머신 타임아웃이 끊는다).
+      logger_warn("[PP] RECOVER: lookahead 점이 차 앞쪽이다 - 조향 0 으로 후진");
+      steer = 0.0;
+    } else {
+      const double alpha = std::atan2(lat, along);
+      steer = -std::atan(2.0*wheelbase*std::sin(alpha) / std::max(1e-6, L1_norm));
+    }
+  }
+
+  steer = clip(steer, -std::abs(reverse_steer_max), std::abs(reverse_steer_max));
+  steer = clip(steer, curr_steering_angle_ - steer_rate_thresh, curr_steering_angle_ + steer_rate_thresh);
+  curr_steering_angle_ = steer;
+
+  // 속도는 상태머신이 실어 보낸 값(음수, dwell 구간에서는 0)을 그대로 쓰되 크기를 제한한다.
+  // 여기서 양수가 절대 못 나가게 막는 것이 중요하다 - RECOVER 인데 전진하면 장애물로 간다.
+  double speed = wp_[idx_nearest_wp_][2];
+  if (!std::isfinite(speed)) speed = 0.0;
+  speed = clip(speed, -std::abs(reverse_speed_max), 0.0);
+
+  return {speed, 0.0, 0.0, steer, L1_point, L1_norm, idx_nearest_wp_};
 }
 
 std::pair<PP_Controller::Vec2,double>

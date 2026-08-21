@@ -16,6 +16,7 @@ OfflineParams load_offline_params(rclcpp::Node * node) {
     p.max_lat_steps = node->declare_parameter<int>("max_lat_steps", 2);
     p.min_vel_race = node->declare_parameter<double>("min_vel_race", 1.0);
     p.max_lateral_accel = node->declare_parameter<double>("max_lateral_accel", 7.0);
+    p.prune_kappa_max = node->declare_parameter<double>("prune_kappa_max", 100.0);
     p.no_interp_points = node->declare_parameter<int>("no_interp_points",50);
 
     p.veh_width = node->declare_parameter<double>("veh_width", 0.28);  // 실측 차폭

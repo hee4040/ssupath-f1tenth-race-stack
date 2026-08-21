@@ -1,0 +1,111 @@
+<!-- -*- mode: XML -*- -->
+<!--
+  레이스라인 없이 '측위만' 띄운다.
+
+  왜 필요한가:
+    base_system_3D_launch.xml 은 맵 디렉터리(stack_master/maps/<map_dir>)에
+    global_waypoints.json / speed_scaling.yaml / ot_sectors.yaml 이 있다고 전제한다.
+    새 장소를 막 매핑해 map.pcd 만 있는 단계에서는 그 셋이 없으므로
+    global_trajectory_publisher 는 "not publishing" 경고만 내고, sector_tuner 와
+    ot_interpolator 는 "Parameter file path is not a file" 경고와 함께 기본값으로 뜬다.
+    (치명적 오류는 아니지만 쓸모없는 노드 셋이 붙고 로그가 지저분해진다.)
+
+    측위 체인 자체는 레이스라인과 아무 상관이 없다:
+      scanmatcher(NDT) -> ekf_localizer -> carstate_3d -> /car_state/pose
+    carstate_3d 는 /global_waypoints 가 없으면 Frenet 변환(timer_cb)만 건너뛰고
+    /car_state/pose 와 /car_state/odom 은 그대로 발행한다. 그래서 sysid 측정에는
+    이걸로 충분하다.
+
+  사용법:
+    ros2 launch stack_master localization_only_launch.xml racecar_version:=NUC2
+
+    ros2 launch stack_master localization_only_launch.xml \
+      map_pcd:=/home/misys/forza_ws/race_stack/map.pcd rviz:=true
+
+    # VESC/조이스틱을 이미 따로 띄웠다면
+    ros2 launch stack_master localization_only_launch.xml bringup:=false
+
+  ★초기 포즈
+    scanmatcher 는 set_initial_pose:=true 면 아래 좌표에서 시작한다(기본 원점·무회전).
+    slam.launch.py 로 갓 만든 맵은 '매핑을 시작한 그 자리'가 원점이므로,
+    차를 매핑 시작 지점에 두고 띄우면 기본값 그대로 맞는다.
+    다른 곳에 두었다면 RViz 의 "2D Pose Estimate" 로 잡아준다
+    (scanmatcher_component.cpp:407 이 /initialpose 를 직접 구독한다).
+    NDT 는 국소 최적화라 초기 포즈가 크게 틀리면 스스로 회복하지 못한다.
+
+  ★map.pcd 경로
+    lidarslam.yaml 에 절대경로로 박혀 있는데, 여기서 map_pcd 인자로 덮어쓴다.
+    그래서 full_localization.launch.xml 을 통째로 include 하지 않고 scanmatcher 만
+    직접 띄운다 — localization.launch.py 안에서 parameters=[lidarslam.yaml] 로 붙는
+    '노드 파라미터'가 set_parameter(전역 오버라이드)보다 우선이라, 밖에서는 못 바꾼다.
+    (실측 확인: set_parameter 로는 yaml 의 경로가 그대로 남았다)
+    나머지 노드 구성은 full_localization.launch.xml 과 동일하다.
+
+  레이스라인을 만들고 나면 이 런치 대신 base_system_3D_launch.xml 을 쓸 것.
+-->
+<launch>
+  <arg name="racecar_version" default="NUC2" description="'NUCx' — vesc/joy 설정 선택" />
+  <arg name="map_pcd" default="/home/misys/forza_ws/race_stack/map.pcd"
+       description="NDT 정합에 쓸 포인트클라우드 맵. slam.launch.py 가 저장한 그 파일" />
+  <arg name="rviz" default="true" description="차에서 rviz2 실행 (초기 포즈 화살표용)" />
+  <arg name="bringup" default="true" description="조이스틱/VESC/라이다 드라이버도 같이 띄울지" />
+
+  <arg name="set_initial_pose" default="true" />
+  <arg name="initial_pose_x" default="0.0" />
+  <arg name="initial_pose_y" default="0.0" />
+  <arg name="initial_pose_z" default="0.0" />
+  <!-- yaw θ 를 주려면 qz=sin(θ/2), qw=cos(θ/2). 헷갈리면 그냥 RViz 로 잡을 것. -->
+  <arg name="initial_pose_qx" default="0.0" />
+  <arg name="initial_pose_qy" default="0.0" />
+  <arg name="initial_pose_qz" default="0.0" />
+  <arg name="initial_pose_qw" default="1.0" />
+
+  <let name="sensors_config" value="$(find-pkg-share stack_master)/config/sensors.yaml" />
+  <let name="mux_config" value="$(find-pkg-share stack_master)/config/mux.yaml" />
+  <let name="joy_teleop_config"
+    value="$(find-pkg-share stack_master)/config/$(var racecar_version)/joy_teleop.yaml" />
+  <let name="vesc_config"
+    value="$(find-pkg-share stack_master)/config/$(var racecar_version)/vesc.yaml" />
+
+  <!-- 드라이버 (조이스틱 + VESC + Livox). base_system_3D_launch.xml 과 동일하게 넘긴다. -->
+  <group if="$(var bringup)">
+    <include file="/home/misys/forza_ws/race_stack/base_system/f1tenth_system/f1tenth_stack/launch/bringup_3D_launch.py">
+      <arg name="joy_teleop_config" value="$(var joy_teleop_config)" />
+      <arg name="vesc_config" value="$(var vesc_config)" />
+      <arg name="sensors_config" value="$(var sensors_config)" />
+      <arg name="mux_config" value="$(var mux_config)" />
+    </include>
+  </group>
+
+  <!-- 측위 체인. full_localization.launch.xml 과 같은 구성이되 scanmatcher 만 직접 띄운다.
+       (위 주석 참조 — map_pcd 를 인자로 받으려면 노드 파라미터로 넣어야 한다) -->
+  <include file="$(find-pkg-share odom_to_twist_converter)/launch/odom_to_twist_converter.launch.xml" />
+  <include file="$(find-pkg-share gyro_odometer)/launch/gyro_odometer.launch.xml" />
+  <include file="$(find-pkg-share ekf_localizer)/launch/ekf_localizer.launch.xml" />
+  <include file="$(find-pkg-share carstate_3d)/launch/carstate_3d_launch.py" />
+
+  <!-- 노드 이름은 반드시 scan_matcher 여야 한다. lidarslam.yaml 의 최상위 키가
+       'scan_matcher:' 라서, 이름이 다르면 yaml 이 통째로 안 먹는다
+       (scanmatcher_component.cpp:12 의 Node("scan_matcher")). -->
+  <node pkg="scanmatcher" exec="scanmatcher_node" name="scan_matcher" output="screen">
+    <param from="$(find-pkg-share lidarslam)/param/lidarslam.yaml" />
+    <!-- yaml 뒤에 오므로 아래 값들이 이긴다 -->
+    <param name="map_path" value="$(var map_pcd)" />
+    <param name="set_initial_pose" value="$(var set_initial_pose)" />
+    <param name="initial_pose_x" value="$(var initial_pose_x)" />
+    <param name="initial_pose_y" value="$(var initial_pose_y)" />
+    <param name="initial_pose_z" value="$(var initial_pose_z)" />
+    <param name="initial_pose_qx" value="$(var initial_pose_qx)" />
+    <param name="initial_pose_qy" value="$(var initial_pose_qy)" />
+    <param name="initial_pose_qz" value="$(var initial_pose_qz)" />
+    <param name="initial_pose_qw" value="$(var initial_pose_qw)" />
+    <remap from="/input_cloud" to="/livox/lidar" />
+  </node>
+
+  <node pkg="tf2_ros" exec="static_transform_publisher"
+        args="0.27 0 0.07 0 0 0.7171 0.7171 base_link livox_frame" />
+
+  <node pkg="rviz2" exec="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share lidarslam)/rviz/localization.rviz" />
+
+</launch>

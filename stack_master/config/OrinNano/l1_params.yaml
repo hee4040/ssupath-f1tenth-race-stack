@@ -4,10 +4,10 @@ controller_manager:
     t_clip_max: 6.0
     # m_l1: 0.583
     # q_l1: -0.167
-    m_l1: 0.575
+    m_l1: 0.4
     q_l1: 0.04
     speed_lookahead: 0.0
-    lat_err_coeff: 0.2
+    lat_err_coeff: 0.4
     # acc_scaler_for_steer_safe: 1.2
     # dec_scaler_for_steer_safe: 0.9 
     # acc_scaler_for_steer_aggressive: 1.1

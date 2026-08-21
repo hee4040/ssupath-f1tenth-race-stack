@@ -314,6 +314,22 @@ private:
       [this](const std::string &s){ RCLCPP_INFO(this->get_logger(), "%s", s.c_str());},
       [this](const std::string &s){ RCLCPP_WARN(this->get_logger(), "%s", s.c_str());}
     );
+
+    // 정지 복구(후진) 파라미터는 생성자 인자를 늘리지 않고 여기서 덮어쓴다.
+    // 키가 YAML 에 없으면 load_l1_params_from_yaml_ 이 경고만 내고 넘어가므로
+    // pp.hpp 의 기본값이 그대로 유지된다.
+    if (l1_params_["reverse_l1_dist"])
+      pp_controller_->reverse_l1_dist = l1_params_["reverse_l1_dist"].as<double>();
+    if (l1_params_["reverse_speed_max"])
+      pp_controller_->reverse_speed_max = l1_params_["reverse_speed_max"].as<double>();
+    if (l1_params_["reverse_steer_max"])
+      pp_controller_->reverse_steer_max = l1_params_["reverse_steer_max"].as<double>();
+    if (l1_params_["reverse_stale_cycles"])
+      pp_controller_->reverse_stale_cycles = l1_params_["reverse_stale_cycles"].as<int>();
+    RCLCPP_INFO(get_logger(),
+      "Reverse recovery params: l1=%.2f m, v_max=%.2f m/s, steer_max=%.2f rad, stale=%d cycles",
+      pp_controller_->reverse_l1_dist, pp_controller_->reverse_speed_max,
+      pp_controller_->reverse_steer_max, pp_controller_->reverse_stale_cycles);
   }
 
   void init_ftg_controller() {
@@ -358,6 +374,8 @@ private:
       "trailing_p_gain","trailing_i_gain","trailing_d_gain","blind_trailing_speed",
       "trailing_to_gbtrack_speed_scale", "curvature_scale",
       "ok_thresh", "hard_thresh", "min_scale", "steer_rate_thresh",
+      // 정지 복구(후진). 없으면 pp.hpp 의 기본값이 쓰인다.
+      "reverse_l1_dist", "reverse_speed_max", "reverse_steer_max", "reverse_stale_cycles",
     };
     l1_params_.clear();
     for (const auto &k : keys) {
@@ -649,6 +667,18 @@ private:
 
   // -------------------- 메인 루프 --------------------
   void control_loop() {
+    // RECOVER 는 PP 에만 후진 경로가 구현돼 있다. 다른 모드에서 이 상태가 오면
+    // 전진 로직이 후진용 웨이포인트(음수 속도, 역순 배열)를 그대로 먹으므로 세운다.
+    if (state_ == "StateType.RECOVER" && !(mode_ == "PP" && pp_controller_)) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+        "RECOVER state but mode=%s has no reverse implementation -> stop.", mode_.c_str());
+      f110_msgs::msg::L1controllerControl stop;
+      stop.steering_angle = 0.0;
+      stop.speed = 0.0;
+      drive_pub_->publish(stop);
+      return;
+    }
+
     if (mode_ == "MAP" && map_controller_) {
       std::tie(speed_, steer_) = map_cycle_();
     } else if (mode_ == "PP" && pp_controller_) {
@@ -681,6 +711,16 @@ private:
   }
 
   std::pair<double,double> pp_cycle_() {
+    // 상태머신이 죽으면 /state 는 RECOVER 로 굳고 로컬 웨이포인트는 갱신되지 않는다.
+    // 그 상태로 두면 마지막 후진 명령으로 계속 뒤로 간다. RECOVER 에서만 감시한다
+    // (전진 거동은 기존과 동일하게 유지).
+    if (state_ == "StateType.RECOVER" &&
+        waypoint_safety_counter_ > pp_controller_->reverse_stale_cycles) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+        "RECOVER: local waypoints stale (%d cycles) -> stop.", waypoint_safety_counter_);
+      return {0.0, 0.0};
+    }
+
     auto out = pp_controller_->main_loop(
       state_,
       position_in_map_,
@@ -697,6 +737,7 @@ private:
 
     set_lookahead_marker_(std::get<4>(out), /*id=*/201);
 
+    waypoint_safety_counter_++;
     return {speed, steer};
   }
 

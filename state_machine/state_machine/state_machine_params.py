@@ -260,6 +260,107 @@ class StateMachineParams:
         node.set_descriptor("hs_brake_factor", descriptor=descriptor)
         self.hs_brake_factor: float = node.get_parameter("hs_brake_factor").value
 
+        descriptor = ParameterDescriptor(
+            description="Speed scaling applied to the avoidance trajectory in OVERTAKE\n"
+                        "1.0 means the avoidance line is commanded at the scaled global speed\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.2, to_value=1.2, step=0.05)]
+        )
+        node.set_descriptor("ot_speed_scaling", descriptor=descriptor)
+        self.ot_speed_scaling: float = node.get_parameter("ot_speed_scaling").value
+
+        # ---- 정지 복구(후진) -------------------------------------------------
+        # 값의 의미와 근거는 stack_master/config/state_machine_params.yaml 주석 참고.
+        descriptor = ParameterDescriptor(
+            description="Enable the reverse recovery manoeuvre when stuck in TRAILING\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_BOOL,
+        )
+        node.set_descriptor("recover_enabled", descriptor=descriptor)
+        self.recover_enabled: bool = node.get_parameter("recover_enabled").value
+
+        descriptor = ParameterDescriptor(
+            description="Speed below which the car counts as stalled in m/s\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0, step=0.01)]
+        )
+        node.set_descriptor("recover_stall_speed_mps", descriptor=descriptor)
+        self.recover_stall_speed_mps: float = node.get_parameter("recover_stall_speed_mps").value
+
+        descriptor = ParameterDescriptor(
+            description="Time the car has to stay stalled before reversing in s\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.5, to_value=10.0, step=0.1)]
+        )
+        node.set_descriptor("recover_stall_time_sec", descriptor=descriptor)
+        self.recover_stall_time_sec: float = node.get_parameter("recover_stall_time_sec").value
+
+        descriptor = ParameterDescriptor(
+            description="Distance to reverse along the centerline in m\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.3, to_value=3.0, step=0.1)]
+        )
+        node.set_descriptor("recover_distance_m", descriptor=descriptor)
+        self.recover_distance_m: float = node.get_parameter("recover_distance_m").value
+
+        descriptor = ParameterDescriptor(
+            description="Magnitude of the commanded reverse speed in m/s\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.1, to_value=1.5, step=0.05)]
+        )
+        node.set_descriptor("recover_speed_mps", descriptor=descriptor)
+        self.recover_speed_mps: float = node.get_parameter("recover_speed_mps").value
+
+        descriptor = ParameterDescriptor(
+            description="Maximum duration of the reverse manoeuvre in s\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=1.0, to_value=20.0, step=0.5)]
+        )
+        node.set_descriptor("recover_timeout_sec", descriptor=descriptor)
+        self.recover_timeout_sec: float = node.get_parameter("recover_timeout_sec").value
+
+        descriptor = ParameterDescriptor(
+            description="Time spent commanding zero speed at the start and end of the reverse in s\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=2.0, step=0.05)]
+        )
+        node.set_descriptor("recover_dwell_sec", descriptor=descriptor)
+        self.recover_dwell_sec: float = node.get_parameter("recover_dwell_sec").value
+
+        descriptor = ParameterDescriptor(
+            description="Number of centerline waypoints published while reversing\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_INTEGER,
+            integer_range=[IntegerRange(from_value=10, to_value=200, step=1)]
+        )
+        node.set_descriptor("recover_n_wpnts", descriptor=descriptor)
+        self.recover_n_wpnts: int = node.get_parameter("recover_n_wpnts").value
+
+        descriptor = ParameterDescriptor(
+            description="Minimum free half width required on the reverse path in m\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0, step=0.01)]
+        )
+        node.set_descriptor("recover_edge_margin_m", descriptor=descriptor)
+        self.recover_edge_margin_m: float = node.get_parameter("recover_edge_margin_m").value
+
+        descriptor = ParameterDescriptor(
+            description="Forward progress required before the reverse manoeuvre can arm again in m\n",
+            read_only=False,
+            type=ParameterType.PARAMETER_DOUBLE,
+            floating_point_range=[FloatingPointRange(from_value=0.0, to_value=50.0, step=0.5)]
+        )
+        node.set_descriptor("recover_rearm_dist_m", descriptor=descriptor)
+        self.recover_rearm_dist_m: float = node.get_parameter("recover_rearm_dist_m").value
+
 
     def parameters_callback(self, parameters: List[Parameter]) -> SetParametersResult:
         for param in parameters:

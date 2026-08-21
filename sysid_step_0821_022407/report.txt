@@ -1,0 +1,63 @@
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48120 (\N{HANGUL SYLLABLE MI}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48516 (\N{HANGUL SYLLABLE BUN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 54872 (\N{HANGUL SYLLABLE HWAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 49328 (\N{HANGUL SYLLABLE SAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+※ 측위 없는 경로다. 속도=ERPM 환산, 횡속도(beta)=0 가정.
+   유효: k_drive / c_roll / 조향 t63 / (--radius 를 줬다면) mu
+   무효: alpha_char, 휠슬립 판정, f_drive_max 힘/마찰 구분, ERPM 게인 검증
+입력: cmd.csv   샘플 3151개 / 31.5 s   v -0.01~1.66 m/s
+
+========================================================================
+2.1 mu  +  2.2 alpha_char   (정상 조향각 + 속도 램프)
+========================================================================
+  IMU wz vs pose 요레이트 상관                   +1.000   OK
+  실현 반경 R (중앙값)                            1.12 m   
+  |a_lat| 최대                           2.49 m/s^2   v=1.66 m/s, R=1.11 m
+  |a_lat| p99                          2.42 m/s^2   
+  -> mu (하한)                                0.254   p99 기준 0.247
+
+  측위가 없어 횡속도(beta)를 모른다 -> 슬립각이 무의미하므로 alpha_char 피팅은 건너뛴다.
+  ★ 게다가 v 가 ERPM 환산이라 바퀴가 헛돌면 mu 가 과대평가된다. --radius 를 주고 다시 볼 것.
+
+========================================================================
+2.3 k_drive   (작은 속도 계단의 접근 시정수)
+========================================================================
+  속도 신호: ERPM 환산 (게인 오차는 tau 에 영향 없음)
+  구간   v0->v_cmd    dv     tau[s]   k_drive[N/(m/s)]  RMS[m/s]  포화?
+    up0  1.23->1.60  +0.37    0.270       18.5        0.016   
+    dn0  1.66->1.20  -0.46    0.322       15.5        0.018   
+    up1  1.18->1.60  +0.42    0.290       17.2        0.013   
+    dn1  1.64->1.20  -0.44    0.326       15.3        0.017   
+    up2  1.17->1.60  +0.43    0.308       16.2        0.016   
+    dn2  1.63->1.20  -0.43    0.320       15.6        0.018   
+    up3  1.16->1.60  +0.44    0.292       17.1        0.016   
+    dn3  1.63->1.20  -0.43    0.326       15.3        0.020   
+    up4  1.17->1.60  +0.43    0.314       15.9        0.012   
+    dn4  1.63->1.20  -0.43    0.328       15.2        0.019   
+    up0  1.24->1.60  +0.36    0.288       17.3        0.012   
+    dn0  1.66->1.20  -0.46    0.352       14.2        0.016   
+    up1  1.17->1.60  +0.43    0.290       17.2        0.013   
+    dn1  1.64->1.20  -0.44    0.336       14.8        0.016   
+    up2  1.18->1.60  +0.42    0.302       16.5        0.010   
+    dn2  1.63->1.20  -0.43    0.312       16.0        0.016   
+    up3  1.17->1.60  +0.43    0.290       17.2        0.010   
+    dn3  1.63->1.20  -0.43    0.316       15.8        0.018   
+    up4  1.17->1.60  +0.43    0.304       16.4        0.012   
+    dn4  1.63->1.20  -0.43    0.332       15.0        0.019   
+  
+  중앙값 tau                              0.313 s   표본 20개, 산포 0.020
+    -> k_drive                       15.9 N/(m/s)   (현재 모델값 40.0)
+    선형구간 폭 f_drive_max/k                 1.95 m/s   계단 크기가 이보다 작아야 유효
+
+========================================================================
+speed_to_erpm_gain 검증  (ERPM 실측 vs pose 실측 속도)
+========================================================================
+  측위가 없으면 ERPM 을 ERPM 과 비교하는 꼴이라 아무 의미가 없다.
+  이 경우의 유일한 방법은 줄자다: const 모드로 직선을 달리고 실제 이동거리를 재서
+  ros2 topic echo /odom 의 position 이동량과 비교한다 (/odom 이 ERPM 환산이므로).
+
+그림 저장: /home/misys/forza_ws/race_stack/sysid_step_0821_022407/plot.png

@@ -1,0 +1,19 @@
+[record_sysid] 저장: /home/misys/forza_ws/race_stack//home/misys/forza_ws/race_stack/sysid_coast_0821_023452/bag  (토픽 17개)
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1787247306.578161626] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1787247306.583045876] [rosbag2_storage]: Opened database '/home/misys/forza_ws/race_stack/sysid_coast_0821_023452/bag/bag_0.db3' for READ_WRITE.
+[INFO] [1787247306.584836194] [rosbag2_recorder]: Listening for topics...
+[INFO] [1787247306.584865281] [rosbag2_recorder]: Event publisher thread: Starting
+[INFO] [1787247306.585156121] [rosbag2_recorder]: Recording...
+[INFO] [1787247308.109316822] [rosbag2_recorder]: Subscribed to topic '/commands/motor/current'
+[INFO] [1787247308.117196510] [rosbag2_recorder]: Subscribed to topic '/odom'
+[INFO] [1787247308.121916924] [rosbag2_recorder]: Subscribed to topic '/sensors/imu'
+[INFO] [1787247308.126512319] [rosbag2_recorder]: Subscribed to topic '/commands/motor/speed'
+[INFO] [1787247308.130572175] [rosbag2_recorder]: Subscribed to topic '/commands/servo/position'
+[INFO] [1787247308.136576907] [rosbag2_recorder]: Subscribed to topic '/drive'
+[INFO] [1787247308.142090324] [rosbag2_recorder]: Subscribed to topic '/joy'
+[INFO] [1787247308.144769963] [rosbag2_recorder]: Subscribed to topic '/sensors/core'
+[INFO] [1787247308.148727646] [rosbag2_recorder]: Subscribed to topic '/sensors/imu/raw'
+[INFO] [1787247308.152531414] [rosbag2_recorder]: Subscribed to topic '/sensors/servo_position_command'
+[INFO] [1787247320.739234542] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1787247320.741554001] [rosbag2_recorder]: Event publisher thread: Exiting
+[INFO] [1787247320.741754700] [rosbag2_recorder]: Recording stopped

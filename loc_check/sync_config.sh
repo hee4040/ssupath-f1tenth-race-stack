@@ -10,7 +10,7 @@
 #   ~/forza_ws/race_stack/loc_check/sync_config.sh          # 어긋난 것만 복사
 #   ~/forza_ws/race_stack/loc_check/sync_config.sh --check  # 확인만, 복사 안 함
 #
-# yaml 은 컴파일 대상이 아니라 복사만으로 충분하다. .cpp 를 고쳤다면 이게 아니라
+# yaml/런치는 컴파일 대상이 아니라 복사만으로 충분하다. .cpp 를 고쳤다면 이게 아니라
 #   MAKEFLAGS=-j2 colcon build --packages-select <pkg>
 # 를 해야 한다.
 #
@@ -25,9 +25,12 @@ cd ~/forza_ws/race_stack || exit 1
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
 
-# "src파일:install목적지디렉터리" 목록
+# "src디렉터리:install목적지디렉터리[:glob]" 목록. glob 기본값은 *.yaml
 PAIRS=(
   "stack_master/config:install/stack_master/share/stack_master/config"
+  # 런치 파일도 install 이 진짜 복사본이다. localization_only_launch.xml 처럼
+  # 새 런치를 추가하고 여기 안 넣으면 ros2 launch 가 못 찾는다.
+  "stack_master/launch:install/stack_master/share/stack_master/launch:*.xml"
   "perception/src/clustering/cluster_to_obstacle_cpp/config:install/cluster_to_obstacle_cpp/share/cluster_to_obstacle_cpp/config"
   "perception/src/clustering/autoware_euclidean_cluster/config:install/autoware_euclidean_cluster/share/autoware_euclidean_cluster/config"
   "perception/src/preprocessing/autoware_pointcloud_preprocessor/config:install/autoware_pointcloud_preprocessor/share/autoware_pointcloud_preprocessor/config"
@@ -36,10 +39,11 @@ PAIRS=(
 
 n_diff=0; n_copy=0; n_skip=0
 for pair in "${PAIRS[@]}"; do
-  SRCD="${pair%%:*}"; DSTD="${pair##*:}"
+  IFS=':' read -r SRCD DSTD GLOB <<< "$pair"
+  GLOB="${GLOB:-*.yaml}"
   [ -d "$SRCD" ] || continue
   [ -d "$DSTD" ] || { echo "  (install 없음, 건너뜀) $DSTD"; continue; }
-  for s in "$SRCD"/*.yaml; do
+  for s in "$SRCD"/$GLOB; do
     [ -f "$s" ] || continue
     d="$DSTD/$(basename "$s")"
     if [ -L "$d" ]; then

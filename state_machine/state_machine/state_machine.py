@@ -2,6 +2,7 @@ import os
 import yaml
 import rclpy
 import numpy as np
+from typing import List
 from builtin_interfaces.msg import Time
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
@@ -12,7 +13,7 @@ from ament_index_python import get_package_share_directory
 from std_msgs.msg import String, Bool
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
-from f110_msgs.msg import WpntArray, OTWpntArray, ObstacleArray
+from f110_msgs.msg import Wpnt, WpntArray, OTWpntArray, ObstacleArray
 from visualization_msgs.msg import Marker, MarkerArray
 try:
     from vesc_msgs.msg import VescStateStamped
@@ -86,6 +87,24 @@ class StateMachine(Node):
 
             self.obstacles = []
             self.create_subscription(ObstacleArray, "/perception/obstacles", self.obstacles_cb, 10)
+
+            # 정지 복구(후진)용 중심선. global_trajectory_publisher 가 5 초마다 재발행하므로
+            # 여기서 기다리지 않는다 — 못 받으면 recover 를 그냥 비활성으로 둔다.
+            # ★ 중심선의 s 파라미터화는 레이스라인과 다르다(lobby_0819: 45.0 m vs 40.45 m).
+            #   그래서 cur_s 로 중심선을 인덱싱하면 안 되고, 반드시 (x, y) 최근접으로 찾는다.
+            self.center_wpnts = None
+            self.center_xy = None
+            self.center_dist = 0.1
+            self.create_subscription(WpntArray, '/centerline_waypoints', self.centerline_wpnts_cb, 10)
+
+            # 정지 복구 상태값
+            self.stall_counter = 0
+            self.recover_armed = True
+            self.recover_start_position = None
+            self.recover_start_time = 0.0
+            self.recover_end_s = None
+            self.recover_idx_step = -1
+            self.recover_warned_no_centerline = False
         
             # TODO setup things for sectors and overtaking sectors
             self.only_ftg_zones = []
@@ -185,6 +204,19 @@ class StateMachine(Node):
         else:
             self.obstacles = []
     
+    def centerline_wpnts_cb(self, data: WpntArray):
+        """중심선 웨이포인트를 받아 후진 복구용으로 보관한다."""
+        wpnts = data.wpnts
+        if len(wpnts) < 3:
+            return
+        # 닫힌 루프면 마지막 점이 첫 점과 겹치므로 하나 뺀다 (glb_wpnts 와 동일한 처리)
+        if (abs(wpnts[-1].x_m - wpnts[0].x_m) < 1e-6 and abs(wpnts[-1].y_m - wpnts[0].y_m) < 1e-6):
+            wpnts = wpnts[:-1]
+        self.center_wpnts = wpnts
+        self.center_xy = np.array([[w.x_m, w.y_m] for w in wpnts])
+        ds = wpnts[1].s_m - wpnts[0].s_m
+        self.center_dist = ds if ds > 1e-3 else 0.1
+
     def car_state_cb(self, data: PoseStamped):
         x = data.pose.position.x
         y = data.pose.position.y
@@ -361,9 +393,199 @@ class StateMachine(Node):
         else:
             emergency_break = False
         return emergency_break
+    # ---- 정지 복구(후진) ---------------------------------------------------
+    # 로컬 플래너가 해를 못 내(otwpnts 빈 배열) TRAILING 에 갇혀 멈춰 있을 때, 중심선을 따라
+    # recover_distance_m 만큼 물러난 뒤 기존 로직을 다시 태운다. 후방 센싱이 없으므로
+    # (passthrough 크롭이 전방만) 아래 검사는 전부 기하학적이다.
+
+    @property
+    def _check_recover_needed(self) -> bool:
+        """RECOVER 로 진입해야 하는지. TRAILING 전이에서만 호출된다."""
+        p = self.params
+        if not p.recover_enabled or not self.recover_armed:
+            return False
+        if self.center_wpnts is None:
+            if not self.recover_warned_no_centerline:
+                self.recover_warned_no_centerline = True
+                self.get_logger().warn(
+                    "[RECOVER] /centerline_waypoints 를 못 받아 정지 복구가 비활성 상태다")
+            return False
+        if self.stall_counter < int(p.recover_stall_time_sec * p.rate_hz):
+            return False
+        if not self._check_recover_path_free:
+            self.get_logger().warn(
+                "[RECOVER] 정지 조건은 맞지만 후진 경로가 좁거나 뒤가 막혀 후진하지 않는다",
+                throttle_duration_sec=2.0)
+            return False
+        return True
+
+    @property
+    def _check_recover_path_free(self) -> bool:
+        """후진 경로가 트랙 안이고, 아는 한 뒤가 비어 있는지 (기하학적 검사만)."""
+        p = self.params
+        if self.center_wpnts is None or self.current_position is None:
+            return False
+
+        # 1) 후진하며 지나갈 중심선 점들이 전부 충분히 넓은가
+        n_center = len(self.center_wpnts)
+        n_back = int(p.recover_distance_m / self.center_dist + 0.5)
+        i0 = self._nearest_center_idx(self.current_position[0], self.current_position[1])
+        step = self._center_backward_step(i0)
+        for k in range(n_back + 1):
+            w = self.center_wpnts[(i0 + step * k) % n_center]
+            if min(w.d_left, w.d_right) < p.recover_edge_margin_m:
+                return False
+
+        # 2) 뒤에 아는 장애물이 있으면 포기한다. 퍼셉션이 후방을 못 보므로 보통 비어 있지만,
+        #    트래킹이 아직 들고 있는 장애물이 있으면 그건 믿을 만한 정보다.
+        back_horizon = p.recover_distance_m + 0.5
+        for obs in self.obstacles:
+            behind = (self.cur_s - obs.s_center) % self.track_length
+            if behind < back_horizon and abs(obs.d_center) < p.lateral_width_gb_m:
+                return False
+        return True
+
+    @property
+    def _check_recover_finished(self) -> bool:
+        """후진을 끝낼 때가 됐는지 (거리 도달 또는 타임아웃)."""
+        p = self.params
+        if self.recover_start_position is None or self.current_position is None:
+            return True
+        elapsed = self._now_sec() - self.recover_start_time
+        if elapsed > p.recover_timeout_sec:
+            self.get_logger().warn(
+                f"[RECOVER] 타임아웃 {elapsed:.1f}s - 후진 종료 (이동 {self._recover_travelled():.2f} m)")
+            return True
+        return self._recover_travelled() >= p.recover_distance_m
+
     ###########
     # HELPERS #
     ###########
+    def _now_sec(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def _nearest_center_idx(self, x: float, y: float) -> int:
+        """중심선에서 (x, y) 에 가장 가까운 인덱스. s 파라미터화가 레이스라인과 다르므로
+        cur_s 로 인덱싱하면 안 되고 반드시 유클리드 최근접으로 찾아야 한다."""
+        d2 = (self.center_xy[:, 0] - x) ** 2 + (self.center_xy[:, 1] - y) ** 2
+        return int(np.argmin(d2))
+
+    def _center_backward_step(self, i0: int) -> int:
+        """중심선 인덱스를 어느 쪽으로 세어야 '차 뒤쪽'인지 (-1 또는 +1).
+
+        보통 인덱스 증가 = 주행 방향이라 -1 이지만, 맵에 따라 뒤집혀 있을 수 있으므로
+        차의 헤딩과 중심선 접선을 실제로 비교해서 정한다.
+        """
+        n = len(self.center_wpnts)
+        tangent = self.center_xy[(i0 + 1) % n] - self.center_xy[(i0 - 1) % n]
+        theta = self.current_position[2]
+        heading = np.array([np.cos(theta), np.sin(theta)])
+        return -1 if float(np.dot(tangent, heading)) >= 0.0 else 1
+
+    def _recover_travelled(self) -> float:
+        """후진 시작 지점에서의 유클리드 변위. s 의 wrap 을 신경 쓰지 않아도 된다."""
+        if self.recover_start_position is None or self.current_position is None:
+            return 0.0
+        return float(np.hypot(self.current_position[0] - self.recover_start_position[0],
+                              self.current_position[1] - self.recover_start_position[1]))
+
+    def _recover_start(self):
+        """RECOVER 진입 시 1회. 시작 자세/시각과 후진 방향을 고정한다."""
+        self.recover_start_position = list(self.current_position)
+        self.recover_start_time = self._now_sec()
+        i0 = self._nearest_center_idx(self.current_position[0], self.current_position[1])
+        # 방향은 진입 시점에 고정한다. 후진 중 헤딩이 흔들려도 방향이 뒤집히면 안 된다.
+        self.recover_idx_step = self._center_backward_step(i0)
+        self.stall_counter = 0
+        self.get_logger().warn(
+            f"[RECOVER] 정지 복구 시작: 중심선을 따라 {self.params.recover_distance_m:.2f} m 후진 "
+            f"(s={self.cur_s:.2f}, d={self.cur_d:.2f}, center_idx={i0}, step={self.recover_idx_step})")
+
+    def _recover_end(self):
+        """RECOVER 이탈 시 1회. 재무장을 잠근다 (같은 자리에서 1회만 후진)."""
+        self.get_logger().warn(
+            f"[RECOVER] 정지 복구 종료: {self._recover_travelled():.2f} m 후진함. "
+            f"전방으로 {self.params.recover_rearm_dist_m:.1f} m 진행하기 전에는 다시 후진하지 않는다")
+        self.recover_start_position = None
+        self.recover_end_s = self.cur_s
+        self.recover_armed = False
+
+    def _update_recover_bookkeeping(self):
+        """매 사이클 맨 앞에서 호출. 정지 카운터와 재무장 여부를 갱신한다."""
+        p = self.params
+
+        # 정지 판정: TRAILING + 거의 안 움직임 + 회피 웨이포인트 없음 + 전방에 장애물.
+        # 전방 장애물 조건이 있어야 출발 대기 중이거나 사람이 세워 둔 상황에서 후진하지 않는다.
+        no_solution = (self.avoidance_wpnts is None or len(self.avoidance_wpnts.wpnts) == 0)
+        if (self.state == StateType.TRAILING
+                and abs(self.cur_vs) < p.recover_stall_speed_mps
+                and no_solution
+                and not self._check_gbfree):
+            self.stall_counter += 1
+            # 재무장이 잠겨 있으면(=이미 한 번 후진했으면) 어차피 후진하지 않으므로
+            # 매초 찍지 않는다. 그대로 두면 남은 주행 내내 콘솔을 덮어버린다.
+            if self.recover_armed and self.stall_counter % int(p.rate_hz) == 0:
+                self.get_logger().warn(
+                    f"[RECOVER] 정지 지속 {self.stall_counter / p.rate_hz:.1f}s "
+                    f"/ {p.recover_stall_time_sec:.1f}s (해 없음, 전방 장애물 있음)")
+            elif not self.recover_armed:
+                self.get_logger().warn(
+                    "[RECOVER] 정지했지만 이미 이 구간에서 후진을 썼다 - 재무장 대기 중",
+                    throttle_duration_sec=5.0)
+        elif self.state != StateType.RECOVER:
+            self.stall_counter = 0
+
+        # 재무장: 후진했던 지점에서 전방으로 recover_rearm_dist_m 이상 실제로 진행했을 때만.
+        # 뒤로 살짝 밀린 것이 wrap 때문에 '거의 한 바퀴 전진'으로 보이지 않도록 상한을 둔다.
+        if not self.recover_armed and self.recover_end_s is not None:
+            progressed = (self.cur_s - self.recover_end_s) % self.track_length
+            if p.recover_rearm_dist_m <= progressed < 0.5 * self.track_length:
+                self.recover_armed = True
+                # 잠겨 있는 동안 쌓인 카운터를 그대로 두면 재무장 즉시 후진해 버린다.
+                # 재무장 후에도 recover_stall_time_sec 을 처음부터 다시 채우게 한다.
+                self.stall_counter = 0
+                self.get_logger().info(
+                    f"[RECOVER] 전방으로 {progressed:.1f} m 진행 - 정지 복구 재무장")
+
+    def get_recover_wpnts(self) -> List[Wpnt]:
+        """후진용 로컬 웨이포인트. 배열 0번이 차에서 가장 가까운 중심선 점이고,
+        인덱스가 커질수록 차 뒤쪽으로 간다. 컨트롤러(PP)의 RECOVER 분기가 이 순서를 전제로
+        인덱스를 키워 후방 lookahead 점을 잡는다.
+
+        속도는 음수로 실어 보낸다 (= 후진 명령). 시작 직후 recover_dwell_sec 동안은 0 을
+        내보내 VESC 속도 폐루프가 0 에서 한 번 안정된 뒤 방향을 바꾸게 한다.
+        """
+        p = self.params
+        if self.center_wpnts is None or self.current_position is None:
+            return []
+
+        elapsed = self._now_sec() - self.recover_start_time
+        speed = 0.0 if elapsed < p.recover_dwell_sec else -abs(p.recover_speed_mps)
+
+        n_center = len(self.center_wpnts)
+        # 매 사이클 현재 위치에서 다시 만든다. 그래야 lookahead 거리가 일정하게 유지되고,
+        # 후진하는 동안 차가 중심선 위로 수렴한다(= d 가 0 으로 정렬된다).
+        i0 = self._nearest_center_idx(self.current_position[0], self.current_position[1])
+        step = self.recover_idx_step
+
+        out: List[Wpnt] = []
+        for k in range(p.recover_n_wpnts):
+            src = self.center_wpnts[(i0 + step * k) % n_center]
+            wp = Wpnt()
+            wp.id = k
+            wp.s_m = src.s_m
+            wp.d_m = src.d_m
+            wp.x_m = src.x_m
+            wp.y_m = src.y_m
+            wp.d_right = src.d_right
+            wp.d_left = src.d_left
+            wp.psi_rad = src.psi_rad
+            wp.kappa_radpm = src.kappa_radpm
+            wp.ax_mps2 = 0.0
+            wp.vx_mps = speed
+            out.append(wp)
+        return out
+
     def get_splini_wpts(self) -> WpntArray:
         """Obtain the waypoints by fusing those obtained by spliner with the
         global ones.
@@ -568,6 +790,10 @@ class StateMachine(Node):
             mrk.color.r = 1.0
             mrk.color.g = 0.5
             mrk.color.b = 0.0
+        elif state == StateType.RECOVER: # 자홍색 (후진 중)
+            mrk.color.r = 1.0
+            mrk.color.g = 0.0
+            mrk.color.b = 1.0
 
         self.state_marker_pub.publish(mrk)
 
@@ -577,11 +803,24 @@ class StateMachine(Node):
     def main_loop_callback(self):
         # self.get_logger().info("i'm in main_looppppppppppppppppppppppp!")
         self.get_logger().debug(f"Current state: {self.state}")
+
+        # 정지 복구용 카운터/재무장 갱신. 전이 판정(_check_recover_needed)이 이 값을 읽으므로
+        # 반드시 state_transition 보다 먼저 돌아야 한다.
+        if self.params.mode == 'head_to_head':
+            self._update_recover_bookkeeping()
+
         # transition logic
+        prev_state = self.state
         if self.params.force_state:
             self.state = self.params.force_state_choice
         else:
             self.state = self.state_transition(self)
+
+        # RECOVER 진입/이탈은 각각 한 번씩만 처리한다
+        if self.state == StateType.RECOVER and prev_state != StateType.RECOVER:
+            self._recover_start()
+        elif prev_state == StateType.RECOVER and self.state != StateType.RECOVER:
+            self._recover_end()
         msg = String()
         msg.data = str(self.state)
         self.state_pub.publish(msg)

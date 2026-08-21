@@ -8,7 +8,7 @@ from visualization_msgs.msg import MarkerArray
 
 # the `.` tells Python to look in the current directory at runtime
 from .readwrite_global_waypoints import read_global_waypoints, read_ltpl_waypoints
-from .origin_map_bounds import compute_origin_bounds
+from .origin_map_bounds import compute_origin_bounds, compute_origin_ltpl_widths
 
 class GlobalRepublisher(Node):
     """
@@ -20,6 +20,10 @@ class GlobalRepublisher(Node):
         self.glb_markers = None
         self.glb_wpnts = None
         self.track_bounds = None
+        # ltpl_wpnts_raw = 파일에서 읽은 그대로(편집 맵 폭).
+        # ltpl_wpnts     = 실제 발행할 것(원본 맵으로 폭을 넓힌 사본이거나, 실패 시 raw).
+        # 보정을 다시 돌릴 때 항상 raw 에서 출발해야 이중으로 넓어지지 않는다.
+        self.ltpl_wpnts_raw = None
         self.ltpl_wpnts = None
 
         self.create_subscription(WpntArray, '/global_waypoints', self.glb_wpnts_cb, 10)
@@ -73,6 +77,19 @@ class GlobalRepublisher(Node):
         # self.create_subscription(MarkerArray, '/lattice_viz', self.lattice_cb, 10)
         # self.lattice_pub = self.create_publisher(MarkerArray, '/lattice_viz', 10)
 
+        # ---- 회피 corridor 를 원본 맵 기준으로 넓힐지 --------------------------
+        # graph_planner 의 회피 노드는 ltpl 웨이포인트의 width_left/right 에서만 나온다.
+        # 그 폭이 편집 맵 기준이라, 레이스라인을 다듬으려고 칠한 검은 붓질이 회피 공간까지
+        # 지운다. 원본 맵(<map>_origin.png)의 진짜 벽으로 폭을 넓혀서 그걸 되돌린다.
+        # 자세한 배경/실측/한계는 origin_map_bounds.compute_origin_ltpl_widths 참조.
+        #   ltpl_origin_widths:=false  -> 예전 동작(편집 맵 폭 그대로)
+        #   ltpl_max_widen             -> 한쪽 폭 증가 상한 [m]. 트랙 경계가 벽이 아니라
+        #                                 테이프/콘이면 작게 잡을 것.
+        # 이 노드는 automatically_declare_parameters_from_overrides 를 쓰므로 launch 에서
+        # 넘어온 값은 이미 선언돼 있다. 중복 선언은 예외라서 반드시 가드해야 한다.
+        self.ltpl_origin_widths = self._param('ltpl_origin_widths', True)
+        self.ltpl_max_widen = self._param('ltpl_max_widen', 0.6)
+
         # Read info from json file if it is provided, so everything is always published
         map_path = self.get_parameter('map_path').get_parameter_value().string_value
         self.map_path = map_path
@@ -86,8 +103,10 @@ class GlobalRepublisher(Node):
                     self.glb_sp_markers, self.glb_sp_wpnts, self.track_bounds
                 ) = read_global_waypoints(map_dir=map_path)
 
-                self.map_infos_ltpl, self.ltpl_wpnts = read_ltpl_waypoints(map_dir=map_path)
+                self.map_infos_ltpl, self.ltpl_wpnts_raw = read_ltpl_waypoints(map_dir=map_path)
+                self.ltpl_wpnts = self.ltpl_wpnts_raw
                 self.build_origin_bounds(map_path)
+                self.build_origin_ltpl_widths(map_path)
                 # 연산 감소를 위해 마커는 처음 파일을 읽었을 때 한 번만 퍼블리시
                 self.pub_marker_once()
 
@@ -103,6 +122,45 @@ class GlobalRepublisher(Node):
         # 0820 수정
         self.create_timer(5.0, self.global_republisher)
         
+
+    def _param(self, name, default):
+        """이미 선언돼 있으면(launch override) 그 값을, 아니면 기본값으로 선언해 쓴다."""
+        if not self.has_parameter(name):
+            self.declare_parameter(name, default)
+        return self.get_parameter(name).value
+
+    def build_origin_ltpl_widths(self, map_path):
+        """ltpl 웨이포인트의 width_left/right 를 원본 맵의 진짜 벽까지로 넓힌다.
+
+        graph_planner 는 이 폭으로만 회피 노드를 만들고(createNodeMap), runOffline 은
+        첫 /ltpl_waypoints 수신 때 **한 번만** 돈다. 그래서 여기서 보정한 값이
+        graph_planner 기동 전에 발행돼야 한다 — 순서는 자연히 맞는다. graph_planner 가
+        첫 메시지를 기다리며 블록하기 때문이다. 반대로 말하면 이 값을 바꾼 뒤에는
+        graph_planner 를 재기동해야 반영된다.
+
+        실패하면 편집 맵 폭을 그대로 쓴다. 즉 이 기능이 죽어도 예전 동작으로 돌아갈 뿐,
+        graph_planner 가 폭을 못 받아 노드를 못 만드는 일은 생기지 않는다.
+        """
+        if self.ltpl_wpnts_raw is None:
+            return
+        if not self.ltpl_origin_widths:
+            self.ltpl_wpnts = self.ltpl_wpnts_raw
+            self.get_logger().info(
+                'ltpl_origin_widths=false -> 회피 corridor 는 편집 맵 폭을 그대로 쓴다')
+            return
+        try:
+            widened, reason = compute_origin_ltpl_widths(
+                map_path, self.ltpl_wpnts_raw, logger=self.get_logger(),
+                max_widen=self.ltpl_max_widen)
+        except Exception as e:  # noqa: BLE001 - 어떤 실패든 편집 맵으로 폴백
+            widened, reason = None, f'unexpected error: {e}'
+
+        if widened is not None:
+            self.ltpl_wpnts = widened
+        else:
+            self.ltpl_wpnts = self.ltpl_wpnts_raw
+            self.get_logger().warn(
+                f'원본 맵으로 ltpl 폭을 넓히지 못해 편집 맵 폭으로 폴백한다 ({reason})')
 
     def build_origin_bounds(self, map_path):
         """원본 맵(<map>_origin.png) 기준으로 d_left/d_right 를 보정한 사본을 만든다.

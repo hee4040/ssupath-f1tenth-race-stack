@@ -1,0 +1,57 @@
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48120 (\N{HANGUL SYLLABLE MI}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48516 (\N{HANGUL SYLLABLE BUN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 54872 (\N{HANGUL SYLLABLE HWAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 49328 (\N{HANGUL SYLLABLE SAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+입력: cmd.csv   샘플 1398개 / 14.0 s   v 0.00~1.89 m/s
+
+========================================================================
+2.1 mu  +  2.2 alpha_char   (정상 조향각 + 속도 램프)
+========================================================================
+  IMU wz vs pose 요레이트 상관                   +0.937   OK
+  실현 반경 R (중앙값)                            1.06 m   
+  |a_lat| 최대                           2.87 m/s^2   v=1.89 m/s, R=1.25 m
+  |a_lat| p99                          2.76 m/s^2   
+  -> mu (하한)                                0.293   p99 기준 0.282
+  tanh 피팅 (rear slip)                    mu=0.300   alpha_char=0.252 rad (14.4 deg), RMS 0.57 m/s^2
+     ※ 슬립각이 alpha_char 까지 못 갔다(최대 0.223 rad). 조향각을 키우거나 속도를 더 올려야 alpha_char 가 확정된다.
+  tanh 피팅 (front slip)                   mu=0.400   alpha_char=0.296 rad (17.0 deg), RMS 0.43 m/s^2
+     ※ 슬립각이 alpha_char 까지 못 갔다(최대 0.191 rad). 조향각을 키우거나 속도를 더 올려야 alpha_char 가 확정된다.
+  요레이트비 (실측/기하)                        1.19 @저횡가속   0.9배로 떨어지는 a_lat = 0.88 m/s^2
+
+  해석:
+    - mu 는 좌/우 회전 각각 3회 이상 돌려 중앙값을 쓸 것(좌우 하중 51.4:48.6 비대칭).
+    - tanh 피팅의 mu 와 위 "하한" mu 가 크게 다르면 한계까지 안 간 것이다.
+
+========================================================================
+2.3 k_drive   (작은 속도 계단의 접근 시정수)
+========================================================================
+  속도 신호: ERPM 환산 (게인 오차는 tau 에 영향 없음)
+  구간   v0->v_cmd    dv     tau[s]   k_drive[N/(m/s)]  RMS[m/s]  포화?
+    up0  1.24->1.60  +0.36    0.278       17.9        0.011   
+    dn0  1.65->1.20  -0.45    0.322       15.5        0.021   
+    up1  1.17->1.60  +0.43    0.310       16.1        0.016   
+    dn1  1.64->1.20  -0.44    0.314       15.9        0.022   
+    up2  1.18->1.60  +0.42    0.310       16.1        0.015   
+    dn2  1.63->1.20  -0.43    0.312       16.0        0.021   
+    up3  1.17->1.60  +0.43    0.306       16.3        0.018   
+    dn3  1.63->1.20  -0.43    0.320       15.6        0.021   
+    up4  1.16->1.60  +0.44    0.312       16.0        0.017   
+    dn4  1.63->1.20  -0.43    0.310       16.1        0.021   
+  
+  중앙값 tau                              0.311 s   표본 10개, 산포 0.011
+    -> k_drive                       16.0 N/(m/s)   (현재 모델값 40.0)
+    선형구간 폭 f_drive_max/k                 1.94 m/s   계단 크기가 이보다 작아야 유효
+
+========================================================================
+speed_to_erpm_gain 검증  (ERPM 실측 vs pose 실측 속도)
+========================================================================
+  현재 설정값 (vesc.yaml)                       3576.0   
+  실측 ERPM/속도                               3617.4   표본 428, IQR 524
+  오차                                       -1.1 %   (+면 차가 명령보다 느리고 /odom 은 거리를 과대계상)
+  같은 구간 이동거리                              12.08 m   (휠오돔 환산 12.15 m)
+
+그림 저장: /home/misys/forza_ws/race_stack/sysid_step_0821_025652/plot.png

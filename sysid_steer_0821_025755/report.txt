@@ -1,0 +1,34 @@
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48120 (\N{HANGUL SYLLABLE MI}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48516 (\N{HANGUL SYLLABLE BUN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 54872 (\N{HANGUL SYLLABLE HWAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 49328 (\N{HANGUL SYLLABLE SAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+입력: cmd.csv   샘플 1167개 / 11.7 s   v 0.00~2.32 m/s
+
+========================================================================
+2.7 조향 액추에이터 + 차량 요응답  (계단 응답 t63)
+========================================================================
+  주행속도                                   1.98 m/s   계단 11개
+  요레이트 t63 (중앙값)                           130 ms   개별 [130, 140, 130, 140, 120, 140, 120, 130, 130, 140, 120]
+  오버슛                                         7 %   
+
+  주의: 이건 서보 단독이 아니라 [서보 + 타이어 완화 + 요관성] 합이다.
+  시뮬(car_cfg.py) 의 조향 PD 는 tau = Kd/Kp = 8/80 = 100 ms 인데,
+  실차 서보 무부하는 43.8 ms 였다. 위 t63 이 시뮬 tau 보다 작으면
+  damping 8.0 -> 2.0 (tau 25 ms) 방향으로 낮추고, 그 다음 k_smooth_steer 를
+  다시 잡아야 한다(조향이 빨라지면 PWM 뱅뱅 조향이 쉬워진다).
+
+========================================================================
+speed_to_erpm_gain 검증  (ERPM 실측 vs pose 실측 속도)
+========================================================================
+  현재 설정값 (vesc.yaml)                       3576.0   
+  실측 ERPM/속도                               3709.1   표본 292, IQR 342
+  오차                                       -3.6 %   (+면 차가 명령보다 느리고 /odom 은 거리를 과대계상)
+  같은 구간 이동거리                               8.96 m   (휠오돔 환산 9.07 m)
+  ★ vesc.yaml 의 speed_to_erpm_gain 을 3709 로 바꾸고 sync_config.sh 실행.
+    줄자 교차검증: const 모드로 5 m 를 달리고 실제 이동거리와 위 pose 거리를 비교.
+
+그림 저장: /home/misys/forza_ws/race_stack/sysid_steer_0821_025755/plot.png

@@ -1,0 +1,27 @@
+[record_sysid] 저장: /home/misys/forza_ws/race_stack//home/misys/forza_ws/race_stack/sysid_circle_0821_055600/bag  (토픽 17개)
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1787259394.604941072] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1787259394.610331918] [rosbag2_storage]: Opened database '/home/misys/forza_ws/race_stack/sysid_circle_0821_055600/bag/bag_0.db3' for READ_WRITE.
+[INFO] [1787259394.612227509] [rosbag2_recorder]: Listening for topics...
+[INFO] [1787259394.612253045] [rosbag2_recorder]: Event publisher thread: Starting
+[INFO] [1787259394.612506861] [rosbag2_recorder]: Recording...
+[INFO] [1787259395.621718228] [rosbag2_recorder]: Subscribed to topic '/commands/motor/speed'
+[INFO] [1787259395.625227179] [rosbag2_recorder]: Subscribed to topic '/commands/servo/position'
+[INFO] [1787259395.747163492] [rosbag2_recorder]: Subscribed to topic '/ekf_odom'
+[INFO] [1787259395.753646849] [rosbag2_recorder]: Subscribed to topic '/ekf_pose'
+[INFO] [1787259395.772502604] [rosbag2_recorder]: Subscribed to topic '/joy'
+[INFO] [1787259395.777245310] [rosbag2_recorder]: Subscribed to topic '/sensors/core'
+[INFO] [1787259395.784510820] [rosbag2_recorder]: Subscribed to topic '/odom'
+[INFO] [1787259395.789913154] [rosbag2_recorder]: Subscribed to topic '/sensors/imu'
+[INFO] [1787259395.797258758] [rosbag2_recorder]: Subscribed to topic '/sensors/imu/raw'
+[INFO] [1787259395.811895535] [rosbag2_recorder]: Subscribed to topic '/sensors/servo_position_command'
+[INFO] [1787259395.819722020] [rosbag2_recorder]: Subscribed to topic '/tf'
+[INFO] [1787259395.825974153] [rosbag2_recorder]: Subscribed to topic '/tf_static'
+[INFO] [1787259395.944351628] [rosbag2_recorder]: Subscribed to topic '/ndt_pose'
+[INFO] [1787259396.176660297] [rosbag2_recorder]: Subscribed to topic '/drive'
+[INFO] [1787259396.311431502] [rosbag2_recorder]: Subscribed to topic '/commands/motor/current'
+[INFO] [1787259396.318030281] [rosbag2_recorder]: Subscribed to topic '/car_state/pose'
+[INFO] [1787259396.323455815] [rosbag2_recorder]: Subscribed to topic '/car_state/odom'
+[INFO] [1787259396.323569795] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...
+[INFO] [1787259437.482731825] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1787259437.485036629] [rosbag2_recorder]: Event publisher thread: Exiting
+[INFO] [1787259437.485172146] [rosbag2_recorder]: Recording stopped

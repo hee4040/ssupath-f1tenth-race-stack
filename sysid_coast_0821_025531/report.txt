@@ -1,0 +1,27 @@
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48120 (\N{HANGUL SYLLABLE MI}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 48516 (\N{HANGUL SYLLABLE BUN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 54872 (\N{HANGUL SYLLABLE HWAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+/home/misys/forza_ws/race_stack/loc_check/analyze_sysid.py:469: UserWarning: Glyph 49328 (\N{HANGUL SYLLABLE SAN}) missing from current font.
+  fig.tight_layout(); fig.savefig(path, dpi=110)
+입력: cmd.csv   샘플 993개 / 9.9 s   v 0.00~2.91 m/s
+
+========================================================================
+2.6 c_roll   (타력주행 감쇠)
+========================================================================
+  속도 범위                              0.81~2.71 m/s   표본 149
+  평균 감속                              -1.279 m/s^2   
+  -> c_roll (공기저항 무시)                      0.1304   (현재 추정값 0.015)
+     (속도폭이 2.5 m/s 미만이라 구름/공기 분리는 하지 않는다 — 이 속도대에서 공기저항은 어차피 무시할 수준이다)
+
+========================================================================
+speed_to_erpm_gain 검증  (ERPM 실측 vs pose 실측 속도)
+========================================================================
+  현재 설정값 (vesc.yaml)                       3576.0   
+  실측 ERPM/속도                               3579.5   표본 65, IQR 608
+  오차                                       -0.1 %   (+면 차가 명령보다 느리고 /odom 은 거리를 과대계상)
+  같은 구간 이동거리                               3.19 m   (휠오돔 환산 3.16 m)
+
+그림 저장: /home/misys/forza_ws/race_stack/sysid_coast_0821_025531/plot.png

@@ -39,6 +39,9 @@ def head_to_head_transition(state_machine: StateMachine)->str:
             return SpliniOvertakingTransition(state_machine)
         case StateType.FTGONLY:
             return SpliniFTGOnlyTransition(state_machine)
+
+        case StateType.RECOVER:
+            return SpliniRecoverTransition(state_machine)
         case default:
             raise ValueError(f"Invalid state {state_machine.state}")
 
@@ -61,6 +64,12 @@ def SpliniTrailingTransition(state_machine: StateMachine) -> StateType:
     ot_sector = state_machine._check_ot_sector
 
     if not state_machine._check_only_ftg_zone:
+        # 해가 없어 제자리에 멈춰 버렸으면 중심선을 따라 뒤로 물러난다.
+        # 다른 어떤 분기보다 먼저 본다 - 여기 걸렸다는 건 아래 분기들이 전부
+        # TRAILING 을 돌려주며 차를 세워 두고 있었다는 뜻이기 때문이다.
+        if state_machine._check_recover_needed:
+            return StateType.RECOVER
+
         # If we have been sitting around in TRAILING for a while then FTG
         # print("gb_freeeeeeeeeeeeeee eeeeeeeeeee", gb_free)
         # print("ooooooooooooooooooooooooooooooooot_sector", ot_sector)
@@ -194,6 +203,20 @@ def SpliniOvertakingTransition(state_machine: StateMachine) -> StateType:
             return StateType.TRAILING
     else:
         return StateType.FTGONLY
+
+
+def SpliniRecoverTransition(state_machine: StateMachine) -> StateType:
+    """Transitions for being in `StateType.RECOVER`
+
+    후진은 중간에 끊지 않는다. 짧게 끊고 전진했다가 다시 막히면 같은 자리에서
+    전진<->후진 진동이 생기고, 이 스택의 탐지는 간헐적이라(otwpnts 의 73.6%가 빈 메시지)
+    '한 프레임 해가 보였다'는 신호를 종료 조건으로 쓸 수 없다.
+    거리를 채우거나 타임아웃이 될 때까지 후진하고, 끝나면 TRAILING 으로 돌아가
+    기존 알고리즘을 그대로 다시 태운다.
+    """
+    if state_machine._check_recover_finished:
+        return StateType.TRAILING
+    return StateType.RECOVER
 
 
 def SpliniFTGOnlyTransition(state_machine: StateMachine) -> StateType:

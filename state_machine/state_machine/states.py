@@ -24,6 +24,9 @@ def DefaultStateLogic(state_machine: StateMachine) -> List[Wpnt]:
         case StateType.TRAILING_TO_GBTRACK:
             return Trailing_to_gbtrack(state_machine)
 
+        case StateType.RECOVER:
+            return Recovering(state_machine)
+
         case _:
             raise NotImplementedError(f"State {state_machine.state} not recognized")
 
@@ -142,12 +145,32 @@ def _fuse_speed_from_global(state_machine: StateMachine, splini_wpts, s: int,
 
 def Overtaking(state_machine: StateMachine) -> List[Wpnt]:
     # 기하는 회피 스플라인에서, 속도는 전역(스케일링된) 웨이포인트에서 가져온다.
-    # (ot_speed_scaling 은 아직 파라미터로 안 만들었음. 일단 코드 내에서 변경해보면서 관찰)
-    # 여기에 속도 의존 배율을 곱한다. 저속에서는 1.0 이라 기존 0.8 그대로 유지된다.
-    ot_speed_scaling = 0.8 * _highspeed_brake_factor(state_machine)
+    #
+    # ★ 2026-08-20: 하드코딩 0.8 을 파라미터 `ot_speed_scaling` 으로 뺐다(기본 1.0).
+    #   obs_debug_0820_1446(79초) 실측으로 회피 경로 속도가 왜 느린지 분해한 결과:
+    #     scaled 전역속도 -> 로컬 웨이포인트 배율이 OVERTAKE 에서 0.743 인데,
+    #     그중 상태배율이 0.774 이고 곡률한계+ax 감속은 0.993 이었다.
+    #     (곡률한계는 배열의 2.7%, ax 감속은 1.2% 지점에서만 걸린다)
+    #   즉 회피 속도를 깎고 있던 것은 물리 제약이 아니라 이 상수 하나였다.
+    #   접지 보호는 아래 _fuse_speed_from_global 의 ay_max 곡률한계와 ax_max 역방향
+    #   감속 패스가 따로 하고 있으므로, 여기서 추가로 일괄 감속할 이유가 없다.
+    #   회피 중 차가 밖으로 밀리면 이 값을 내리지 말고 ay_max 를 내리는 게 맞다
+    #   (그래야 굽은 구간만 느려지고 직선 회피 구간은 안 느려진다).
+    ot_speed_scaling = state_machine.params.ot_speed_scaling * _highspeed_brake_factor(state_machine)
     splini_wpts = state_machine.get_splini_wpts()
     s = int(state_machine.cur_s/state_machine.waypoints_dist + 0.5)
     return _fuse_speed_from_global(state_machine, splini_wpts, s, ot_speed_scaling)
+
+def Recovering(state_machine: StateMachine) -> List[Wpnt]:
+    """장애물 앞에서 해가 없어 멈췄을 때 중심선을 따라 뒤로 물러난다.
+
+    배열은 '차에서 가장 가까운 중심선 점 -> 뒤쪽' 순서이고 속도는 음수다.
+    컨트롤러(controller/pp) 의 RECOVER 분기가 이 순서를 전제로 후방 lookahead 를 잡고
+    후진 pure pursuit 로 조향한다. 여기서 전역 웨이포인트를 섞지 않는 이유는,
+    전역 속도/곡률 프로파일이 전부 전진 기준이라 후진에는 의미가 없기 때문이다.
+    """
+    return state_machine.get_recover_wpnts()
+
 
 def FTGOnly(state_machine: StateMachine) -> List[Wpnt]:
     """No waypoints are generated in this follow the gap only state, all the 

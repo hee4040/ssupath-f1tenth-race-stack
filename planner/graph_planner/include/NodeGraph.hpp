@@ -1,6 +1,8 @@
 #pragma once
 #include "graph_planner.hpp"
 #include "offline_params.hpp"
+#include <set>
+#include <map>
 
 struct pair_hash {
     template <class T1, class T2>
@@ -419,6 +421,17 @@ public:
     if (params.lat_offset <= 0.0)    {
       throw invalid_argument("Too small lateral offset!");
     }
+    // ---- genEdges 실측 계측 (2026-08-20). 오프라인 1회만 도므로 비용 무시 가능 ----
+    size_t dbg_pairs_possible = 0;   // 이론상 가능한 (src,dst) 쌍 = sum(n_L * n_{L+1})
+    size_t dbg_pairs_tried    = 0;   // lat_steps 창 안에 들어와 실제로 시도한 쌍
+    size_t dbg_edges_added    = 0;   // addEdge 호출 수
+    size_t dbg_spline_empty   = 0;   // computeSplines 가 빈 결과를 준 횟수
+    std::map<int,int> dbg_lat_steps_hist;
+    std::map<int,int> dbg_window_hist;  // 창 폭(실제 연결 가능 노드 수) 분포
+    for (int l = 0; l < num_layers; ++l) {
+      int d = (l + 1) % num_layers;
+      dbg_pairs_possible += nodeMap[l].size() * nodeMap[d].size();
+    }
     // for (int i=0; i<num_layers; ++i) {
     //     RCLCPP_INFO(logger, "layer %d, nodeMap size=%zu, nodeIndexOnRaceline=%d", i, nodeMap[i].size(), nodeIndexesOnRaceline[i]);
     // }
@@ -495,6 +508,12 @@ public:
         int lat_steps = static_cast<int>(round(dist * params.lat_offset / params.lat_resolution));
         // cout << srcLayerIdx << "의 " << srcNodeIdx << "가 다음 refendNode와의 거리: " << dist << endl;
         lat_steps = min(lat_steps, params.max_lat_steps); // endNode 기준 2*lat_steps + 1개의 노드와 연결한다.
+        dbg_lat_steps_hist[lat_steps]++;
+        {
+          int lo = max(0, refEndNodeIdx - lat_steps);
+          int hi = min(static_cast<int>(nodeMap[dstLayerIdx].size() - 1), refEndNodeIdx + lat_steps);
+          dbg_window_hist[max(0, hi - lo + 1)]++;
+        }
         // cout << srcNodeIdx << "번째 노드의 lat_steps" << lat_steps << endl;
         // startNode와 lat_steps 기준 해당되는 노드들 spline 연결
         for (int endNodeIdx = max(0, refEndNodeIdx - lat_steps);
@@ -512,8 +531,10 @@ public:
           path(1, 0) = endNode.x;
           path(1, 1) = endNode.y;
 
+          dbg_pairs_tried++;
           auto result = computeSplines(path, startNode.psi, endNode.psi);
           // cout << "result: " << result->el_lengths.size()  << endl;
+          if (!result || result->coeffs_x.size() == 0) dbg_spline_empty++;
           IPair startPoint = make_pair(srcLayerIdx, srcNodeIdx);
           IPair endPoint = make_pair(dstLayerIdx, endNodeIdx);
 
@@ -521,11 +542,53 @@ public:
 
           // graph에 넣는 과정
           addEdge(startPoint, endPoint);
+          dbg_edges_added++;
 
           // cout << "startPoint:" << startPoint.first << ", " << startPoint.second << " -> ";
           // cout << "endPoint:" << endPoint.first << ", " << endPoint.second << endl;
         }
       }
+    }
+
+    // ---- 실측 리포트 ----------------------------------------------------
+    {
+      size_t total_nodes = 0, zero_child = 0, min_ch = SIZE_MAX, max_ch = 0, sum_ch = 0;
+      std::map<size_t,int> child_hist;
+      std::ostringstream layers;
+      for (int l = 0; l < num_layers; ++l) {
+        total_nodes += nodeMap[l].size();
+        for (size_t i = 0; i < nodeMap[l].size(); ++i) {
+          size_t c = nodeGraph[{l, (int)i}].size();
+          child_hist[c]++;
+          sum_ch += c;
+          if (c == 0) zero_child++;
+          min_ch = std::min(min_ch, c);
+          max_ch = std::max(max_ch, c);
+        }
+        layers << l << ":" << nodeMap[l].size() << "/rl" << nodeIndexesOnRaceline[l] << " ";
+      }
+      std::ostringstream ls, ws, cs;
+      for (auto &kv : dbg_lat_steps_hist) ls << kv.first << "->" << kv.second << " ";
+      for (auto &kv : dbg_window_hist)    ws << kv.first << "->" << kv.second << " ";
+      for (auto &kv : child_hist)         cs << kv.first << "->" << kv.second << " ";
+
+      RCLCPP_INFO(logger,
+        "\n===== genEdges 실측 =====\n"
+        "  layer %d개, 노드 %zu개\n"
+        "  이론상 가능한 (src,dst) 쌍 sum(n_L*n_L+1) = %zu\n"
+        "  lat_steps 창 안에서 시도한 쌍           = %zu  (%.1f%%)\n"
+        "  실제 addEdge 된 엣지                    = %zu  (raceline %d개 별도)\n"
+        "  computeSplines 빈 결과                  = %zu\n"
+        "  노드당 자식: min %zu / 평균 %.2f / max %zu, 자식 0개인 노드 %zu개\n"
+        "  자식수 분포      : %s\n"
+        "  lat_steps 분포   : %s\n"
+        "  연결창 폭 분포   : %s\n"
+        "  layer:노드수/rl  : %s",
+        num_layers, total_nodes, dbg_pairs_possible, dbg_pairs_tried,
+        100.0 * dbg_pairs_tried / std::max<size_t>(dbg_pairs_possible,1),
+        dbg_edges_added, num_layers, dbg_spline_empty,
+        (min_ch==SIZE_MAX?0:min_ch), (double)sum_ch/std::max<size_t>(total_nodes,1), max_ch, zero_child,
+        cs.str().c_str(), ls.str().c_str(), ws.str().c_str(), layers.str().c_str());
     }
   }
 
@@ -685,9 +748,24 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
   /////////////////////////////제거 과정///////////////////////////////
   ///////////////////////////////////////////////////////////////////
 
+    // 계측용: layer L -> L+1 로 남아있는 엣지 수
+    std::vector<size_t> edgeCountPerLayer(NodeMap &nodeMap) {
+        std::vector<size_t> out(num_layers, 0);
+        for (int l = 0; l < num_layers; ++l)
+            for (size_t i = 0; i < nodeMap[l].size(); ++i)
+                out[l] += nodeGraph[{l, (int)i}].size();
+        return out;
+    }
+
     void pruneEdges(NodeMap &nodeMap, const DVector& raceline_vx)  {
 
       int rmv_cnt = 0;
+      // ---- pruneEdges 실측 (2026-08-20) ----
+      int dbg_curv_rm = 0, dbg_isolated_rm = 0;
+      std::map<int,int> dbg_curv_by_layer, dbg_iso_by_layer;
+      double dbg_kappa_max_seen = 0.0;
+      std::map<int,int> dbg_kappa_hist;
+      auto dbg_before = edgeCountPerLayer(nodeMap);
       
       // s_time = clock();
 
@@ -721,6 +799,9 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
 
                 bool toRemove = false;
 
+                double dbg_peak = kappaVector.array().abs().maxCoeff();
+                dbg_kappa_max_seen = std::max(dbg_kappa_max_seen, dbg_peak);
+                dbg_kappa_hist[(int)std::floor(std::min(dbg_peak, 20.0))]++;
                 for (int j = 0; j < kappaVector.size(); ++j) {
 
                     double kappa_val = abs(kappaVector(j));
@@ -730,7 +811,7 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
                     //     toRemove = true;
                     //     break;
                     // }
-                    if ((kappa_val > 5.0))
+                    if ((kappa_val > params.prune_kappa_max))
                     {
                         toRemove = true;
                         break;
@@ -742,6 +823,7 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
                 if (toRemove) {
                     removeEdge(start, end);
                     rmv_cnt++;
+                    dbg_curv_rm++; dbg_curv_by_layer[start.first]++;
                     }
                 }
             }
@@ -765,6 +847,7 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
               // cout << "remove!" << endl;
               removeEdge(srcNodeIdx, child);
               rmv_cnt++;
+              dbg_isolated_rm++; dbg_iso_by_layer[layerIdx]++;
             }
           }
         }
@@ -773,6 +856,37 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
     
     if (rmv_cnt > 0)
       cout << "Removed splines due to curvature conditions && isolated nodes: " << rmv_cnt << endl;
+
+    // ---- pruneEdges 실측 리포트 ----
+    {
+      auto after = edgeCountPerLayer(nodeMap);
+      size_t tot_b = 0, tot_a = 0, zero_child = 0, thin_layers = 0;
+      std::ostringstream per_layer, kh, ch, ih;
+      for (int l = 0; l < num_layers; ++l) { tot_b += dbg_before[l]; tot_a += after[l]; }
+      for (int l = 0; l < num_layers; ++l) {
+        if (after[l] * 2 < dbg_before[l]) thin_layers++;
+        per_layer << l << ":" << dbg_before[l] << "->" << after[l]
+                  << (after[l] * 2 < dbg_before[l] ? "!! " : " ");
+      }
+      for (int l = 0; l < num_layers; ++l)
+        for (size_t i = 0; i < nodeMap[l].size(); ++i)
+          if (nodeGraph[{l, (int)i}].empty()) zero_child++;
+      for (auto &kv : dbg_kappa_hist)     kh << kv.first << "->" << kv.second << " ";
+      for (auto &kv : dbg_curv_by_layer)  ch << kv.first << ":" << kv.second << " ";
+      for (auto &kv : dbg_iso_by_layer)   ih << kv.first << ":" << kv.second << " ";
+      std::cout << "\n===== pruneEdges 실측 =====\n"
+        << "  엣지 " << tot_b << " -> " << tot_a
+        << "  (" << (tot_b - tot_a) << "개 삭제, " << (100.0*(tot_b-tot_a)/std::max<size_t>(tot_b,1)) << "%)\n"
+        << "  명시적 removeEdge 호출: 곡률 " << dbg_curv_rm << " + 고아노드 " << dbg_isolated_rm
+        << " = " << rmv_cnt << "  -> 나머지 " << ((long)(tot_b-tot_a) - rmv_cnt) << " 개는 재귀 연쇄 삭제\n"
+        << "  최대 |kappa| 관측: " << dbg_kappa_max_seen << " (임계 5.0 = 반경 0.2 m)\n"
+        << "  엣지 peak|kappa| 분포 (floor): " << kh.str() << "\n"
+        << "  곡률삭제 layer 분포: " << ch.str() << "\n"
+        << "  고아삭제 layer 분포: " << ih.str() << "\n"
+        << "  자식 0개 노드: " << zero_child << " 개\n"
+        << "  절반 이상 날아간 layer: " << thin_layers << " 개\n"
+        << "  layer별 엣지 before->after: " << per_layer.str() << "\n" << std::endl;
+    }
 
   }
 
@@ -950,12 +1064,20 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
 
   }
 
-    IPairVector graph_search(
+  // blocked: 장애물이 가리는 노드 집합. nullptr 이 아니면 그 노드들은 탐색에서 아예 제외한다
+  //   (= 하드 프루닝). 예전에는 apply_node_filter 로 나가는 edge 에 +1e6 벌점만 줬는데,
+  //   벌점이 유한하므로 우회 경로의 곡률 비용이 1e6 을 넘는 순간 "장애물을 뚫고 가는 해"가
+  //   최적이 되어버렸다. 그걸 runOnline 이 통째로 폐기해서 빈 경로가 나갔다(실측 73.6%).
+  //   후보 생성 단계에서 빼버리면 그런 해가 애초에 만들어지지 않으므로,
+  //   반환되는 경로는 항상 "장애물을 안 밟는 경로"이고, 못 찾으면 그건 진짜로 길이 없는 것이다.
+  //   시작 노드(startIdx)는 예외다 - 차가 이미 차단 영역 안에 서 있을 수 있다.
+  IPairVector graph_search(
     IPair startIdx,
     int goalLayer,
     const IVector& nodeIndicesOnRaceline,
     const rclcpp::Logger& logger,
-    bool isClosedTrack = true  // 트랙 폐회로 여부 인자 추가
+    bool isClosedTrack = true,  // 트랙 폐회로 여부 인자 추가
+    const std::set<IPair>* blocked = nullptr
 ) {
     std::unordered_map<IPair, double, pair_hash> dist;
     std::unordered_map<IPair, IPair, pair_hash> parent;
@@ -966,7 +1088,7 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
     dist[startIdx] = 0.0;
     pq.push({0.0, startIdx});
 
-    size_t expanded = 0, pushed = 0;
+    size_t expanded = 0, pushed = 0, pruned = 0;
     IPair goalNode = {-1, -1};
     double bestCost = 1e12;
 
@@ -1004,6 +1126,8 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
 
         for (auto &v : getChildList(u)) {
             if (!layerWithinRange(v.first)) continue;
+            // 하드 프루닝: 차단 노드는 후보에 올리지 않는다 (비용 비교 자체를 없앤다)
+            if (blocked && blocked->count(v)) { pruned++; continue; }
 
             double edgeCost = splineMap[u][v].cost;
             double newCost  = cost + edgeCost;
@@ -1034,9 +1158,12 @@ std::vector<SplineSample> interpSpline(const MatrixXd &coeffs_x,
     }
 
     if (goalNode.first == -1) {
-        RCLCPP_WARN(logger,
-                    "graph_search(): No valid goal found up to layer %d (expanded=%zu, pushed=%zu)",
-                    goalLayer, expanded, pushed);
+        // 하드 프루닝이면 통로가 막힌 동안 매 주기 찍히므로 1 Hz 로 조인다.
+        static rclcpp::Clock s_throttle_clock(RCL_STEADY_TIME);
+        RCLCPP_WARN_THROTTLE(logger, s_throttle_clock, 1000,
+                    "graph_search(): No valid goal found up to layer %d "
+                    "(expanded=%zu, pushed=%zu, pruned=%zu) -> 자유 통로가 실제로 없다",
+                    goalLayer, expanded, pushed, pruned);
         return {};
     }
 

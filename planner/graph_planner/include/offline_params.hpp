@@ -16,6 +16,12 @@ struct OfflineParams {
     int max_lat_steps;
     double min_vel_race;
     double max_lateral_accel;
+    // pruneEdges 의 곡률 제거 임계 [rad/m]. peak |kappa| 가 이 값을 넘는 spline 을 그래프에서
+    // 영구 삭제한다. 예전엔 5.0 하드코딩이었고, 그게 코너의 엣지를 대량으로 지워 다익스트라가
+    // 해를 못 찾는 주원인이었다. 곡률은 이미 computeSplineCost 의 w_curv_avg/w_curv_peak 로
+    // 비용에 반영되므로(= 완만한 길이 있으면 알아서 그쪽으로 간다), 삭제까지 할 이유가 없다.
+    // 기본값 100.0 = 사실상 비활성 (2026-08-20).
+    double prune_kappa_max;
 
     double min_plan_horizon;
     int no_interp_points;
