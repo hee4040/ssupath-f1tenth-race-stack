@@ -68,5 +68,5 @@
     #   (근거리 클러스터 점 중앙값이 53 -> 71 로 커진 것이 증거). 07-24 백업본의
     #   3/0.3 조합도 현재보다 나빴다.
     min_cluster_size: 3    # 이전값 4 (그 이전 3)
-    tolerance: 0.1          #0.4
+    tolerance: 0.15          #0.4
     use_height: false

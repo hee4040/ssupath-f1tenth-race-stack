@@ -281,16 +281,16 @@ class StateMachineParams:
         self.recover_enabled: bool = node.get_parameter("recover_enabled").value
 
         descriptor = ParameterDescriptor(
-            description="Speed below which the car counts as stalled in m/s\n",
+            description="Distance the car must fail to cover within the stall window in m\n",
             read_only=False,
             type=ParameterType.PARAMETER_DOUBLE,
             floating_point_range=[FloatingPointRange(from_value=0.0, to_value=1.0, step=0.01)]
         )
-        node.set_descriptor("recover_stall_speed_mps", descriptor=descriptor)
-        self.recover_stall_speed_mps: float = node.get_parameter("recover_stall_speed_mps").value
+        node.set_descriptor("recover_stall_travel_m", descriptor=descriptor)
+        self.recover_stall_travel_m: float = node.get_parameter("recover_stall_travel_m").value
 
         descriptor = ParameterDescriptor(
-            description="Time the car has to stay stalled before reversing in s\n",
+            description="Length of the stall window; also the delay before reversing in s\n",
             read_only=False,
             type=ParameterType.PARAMETER_DOUBLE,
             floating_point_range=[FloatingPointRange(from_value=0.5, to_value=10.0, step=0.1)]
@@ -311,7 +311,7 @@ class StateMachineParams:
             description="Magnitude of the commanded reverse speed in m/s\n",
             read_only=False,
             type=ParameterType.PARAMETER_DOUBLE,
-            floating_point_range=[FloatingPointRange(from_value=0.1, to_value=1.5, step=0.05)]
+            floating_point_range=[FloatingPointRange(from_value=0.1, to_value=3.0, step=0.05)]
         )
         node.set_descriptor("recover_speed_mps", descriptor=descriptor)
         self.recover_speed_mps: float = node.get_parameter("recover_speed_mps").value

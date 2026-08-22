@@ -6,8 +6,8 @@ graph_planner:
     # offline
     lat_resolution: 0.1 #0.1 
     variable_heading: true
-    d_straight: 1.8
-    d_curve: 0.8
+    d_straight: 1.8 #1.8
+    d_curve: 0.8 #0.8
     curve_thr: 0.02
     lat_offset: 3.0
     max_lat_steps: 8
@@ -81,12 +81,12 @@ graph_planner:
     #                  =    0.14     +     0.15      +      0      *     0.1     = 0.29 m
     #
     # safety_margin [m]: 회피선이 장애물 표면에서 확보할 여유(저속 기준).
-    safety_margin: 0.25
+    safety_margin: 0.10
     # min_safety_margin [m]: 폭이 좁아 해가 없을 때 layer 단위로 여기까지 깎는 하한.
     #   ★ state_machine 의 lateral_width_ot_m(0.17) 이 여기 묶여 있다:
     #     veh_width/2 < lateral_width_ot_m < veh_width/2 + min_safety_margin
     #     (0.14 < 0.17 < 0.19). 이 값을 바꾸면 lateral_width_ot_m 도 같이 봐야 한다.
-    min_safety_margin: 0.15
+    min_safety_margin: 0.03
     #
     # block_obs_tail_layer [bool]: 장애물이 걸친 layer 바로 뒤 한 장("꼬리 layer")도 막을지.
     #   2026-08-20 이전 거동은 true 였다 (find_obs_jone 의 span+1).

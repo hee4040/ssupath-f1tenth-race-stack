@@ -326,6 +326,18 @@ private:
       pp_controller_->reverse_steer_max = l1_params_["reverse_steer_max"].as<double>();
     if (l1_params_["reverse_stale_cycles"])
       pp_controller_->reverse_stale_cycles = l1_params_["reverse_stale_cycles"].as<int>();
+    if (l1_params_["lat_err_from_path"])
+      pp_controller_->lat_err_from_path = l1_params_["lat_err_from_path"].as<bool>();
+    if (l1_params_["ct_gain"])
+      pp_controller_->ct_gain    = l1_params_["ct_gain"].as<double>();
+    if (l1_params_["ct_max_rad"])
+      pp_controller_->ct_max_rad = l1_params_["ct_max_rad"].as<double>();
+    if (l1_params_["ct_v_min"])
+      pp_controller_->ct_v_min   = l1_params_["ct_v_min"].as<double>();
+    RCLCPP_INFO(get_logger(),
+      "Cross-track: lat_err_from_path=%s, ct_gain=%.3f, ct_max=%.3f rad, ct_v_min=%.2f m/s",
+      pp_controller_->lat_err_from_path ? "path" : "raceline(legacy)",
+      pp_controller_->ct_gain, pp_controller_->ct_max_rad, pp_controller_->ct_v_min);
     RCLCPP_INFO(get_logger(),
       "Reverse recovery params: l1=%.2f m, v_max=%.2f m/s, steer_max=%.2f rad, stale=%d cycles",
       pp_controller_->reverse_l1_dist, pp_controller_->reverse_speed_max,
@@ -376,6 +388,8 @@ private:
       "ok_thresh", "hard_thresh", "min_scale", "steer_rate_thresh",
       // 정지 복구(후진). 없으면 pp.hpp 의 기본값이 쓰인다.
       "reverse_l1_dist", "reverse_speed_max", "reverse_steer_max", "reverse_stale_cycles",
+      // 횡오차 기준 / 횡오차 보정 항. 없으면 pp.hpp 의 기본값이 쓰인다.
+      "lat_err_from_path", "ct_gain", "ct_max_rad", "ct_v_min",
     };
     l1_params_.clear();
     for (const auto &k : keys) {
@@ -448,6 +462,16 @@ private:
     decl("q_l1", l1_params_["q_l1"],         param_desc(fp_range(-1.0,1.0,0.001)));
     decl("speed_lookahead", l1_params_["speed_lookahead"], param_desc(fp_range(0.0,1.0,0.01)));
     decl("lat_err_coeff",   l1_params_["lat_err_coeff"],   param_desc(fp_range(0.0,1.0,0.01)));
+    // 횡오차 기준 / 횡오차 보정 항 (PP 전용). 주행 중 조절 가능.
+    declare_parameter("lat_err_from_path",
+                      pp_controller_ ? pp_controller_->lat_err_from_path : true);
+    // decl 은 YAML::Node 를 받는 헬퍼라, YAML 에 키가 없어도 되도록 직접 선언한다.
+    declare_parameter("ct_gain",    pp_controller_ ? pp_controller_->ct_gain    : 0.0,
+                      param_desc(fp_range(0.0, 2.0, 0.01)));
+    declare_parameter("ct_max_rad", pp_controller_ ? pp_controller_->ct_max_rad : 0.15,
+                      param_desc(fp_range(0.0, 0.5, 0.005)));
+    declare_parameter("ct_v_min",   pp_controller_ ? pp_controller_->ct_v_min   : 1.0,
+                      param_desc(fp_range(0.1, 5.0, 0.05)));
     decl("acc_scaler_for_steer", l1_params_["acc_scaler_for_steer"], param_desc(fp_range(0.0,1.5,0.01)));
     decl("dec_scaler_for_steer", l1_params_["dec_scaler_for_steer"], param_desc(fp_range(0.0,1.5,0.01)));
     decl("start_scale_speed", l1_params_["start_scale_speed"], param_desc(fp_range(0.0,10.0,0.01)));
@@ -518,6 +542,10 @@ private:
       pp_controller_->q_l1                      = get_parameter("q_l1").as_double();
       pp_controller_->speed_lookahead           = get_parameter("speed_lookahead").as_double();
       pp_controller_->lat_err_coeff             = get_parameter("lat_err_coeff").as_double();
+      pp_controller_->lat_err_from_path         = get_parameter("lat_err_from_path").as_bool();
+      pp_controller_->ct_gain                   = get_parameter("ct_gain").as_double();
+      pp_controller_->ct_max_rad                = get_parameter("ct_max_rad").as_double();
+      pp_controller_->ct_v_min                  = get_parameter("ct_v_min").as_double();
       pp_controller_->acc_scaler_for_steer      = get_parameter("acc_scaler_for_steer").as_double();
       pp_controller_->dec_scaler_for_steer      = get_parameter("dec_scaler_for_steer").as_double();
       pp_controller_->start_scale_speed         = get_parameter("start_scale_speed").as_double();

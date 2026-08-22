@@ -814,36 +814,55 @@ private:
   void publishMarkers() {
   if (!initialized_track_) return;
 
-  // 1) 먼저 모두 지우고
-  visualization_msgs::msg::MarkerArray clear;
-  visualization_msgs::msg::Marker del;
-  del.action = visualization_msgs::msg::Marker::DELETEALL;
-  clear.markers.push_back(del);
-  static_dynamic_marker_pub_->publish(clear);
-
-  // 2) 새 마커들 생성
+  // ★ 2026-08-22 (1): DELETEALL 을 같은 MarkerArray 의 첫 원소로 넣는다.
+  //   예전에는 clear 를 별도 메시지로 먼저 publish 하고 마커를 두 번째 메시지로 보냈다.
+  //   rviz 는 메시지 단위로 처리하므로 두 메시지 사이에 렌더 틱이 끼면 그 프레임은
+  //   통째로 빈 화면이 된다. 실시간에서는 두 메시지 간격이 중앙 0.08 ms(p90 0.27 ms,
+  //   max 12.4 ms) 라 티가 잘 안 나지만, 백 재생에서는 rosbag2 가 디스크에서 묶어
+  //   읽어 내보내므로 간격이 훨씬 커진다 — "라이브에서는 보이는데 녹화본에서는
+  //   드문드문 보인다" 의 정체가 이것이다. (녹화 손실이 아니다: obs_debug_0822_1211
+  //   에서 DELETEALL 이 정확히 40.01 Hz = 노드 rate 로 다 잡혀 있었다.)
+  //   한 메시지로 보내면 clear -> add 가 원자적으로 처리돼 빈 프레임이 없어진다.
+  //   덤으로 토픽 발행률이 절반(80 -> 40 Hz)이 되어 QoS depth 5 에도 여유가 생긴다.
   visualization_msgs::msg::MarkerArray arr;
+  {
+    visualization_msgs::msg::Marker del;
+    del.action = visualization_msgs::msg::Marker::DELETEALL;
+    arr.markers.push_back(del);
+  }
 
-  // (A) 정적/미정 장애물만 시각화 (publish_static_가 true일 때만)
+  // (A) 추적 중인 장애물. 정적/동적/미정을 색으로 구분한다.
+  //       초록 = 정적 / 빨강 = 동적 / 자홍 = 미정(측정이 sd_min_nb_meas 이하라 판정 전)
+  //
+  // ★ 2026-08-22 (2): 동적 트랙을 그리는 가지를 추가했다.
+  //   예전에는 draw_unknown / draw_static 두 가지뿐이라 staticFlag == false 인 트랙이
+  //   통째로 스킵됐다. 즉 '동적으로 판정된 장애물' 은 rviz 에서 완전히 투명했고,
+  //   화면의 빨간 원은 아래 (B) 의 opponent EKF 마커 하나뿐이었다.
+  //   (주석 처리된 옛 버전에도 tracked_dynamic ns 는 있었지만 색 분기가 없어
+  //    rgb(0,0,0) = 검정으로 그려졌다. 결국 안 보이기는 마찬가지였다.)
   for (const auto &t : tracked_) {
     if (!t.isInFront) continue;
 
-    // 파이썬 로직: staticFlag == None 이고 publish_static_=true → 그리기
-    //             staticFlag == true 이고 publish_static_=true → 그리기
-    //             그 외(동적 또는 publish_static_=false) → 스킵
-    bool draw_unknown = (!t.staticFlag.has_value() && publish_static_);
-    bool draw_static  = (t.staticFlag.has_value() && t.staticFlag.value() && publish_static_);
-    if (!draw_unknown && !draw_static) continue;
+    const bool is_unknown = !t.staticFlag.has_value();
+    const bool is_static  = !is_unknown &&  t.staticFlag.value();
+    const bool is_dynamic = !is_unknown && !t.staticFlag.value();
 
-    // 좌표 선택: 미정 → 가장 최근 측정, 정적 → 평균
-    const double s_draw = draw_unknown ? t.meas_s.back() : t.mean_s;
-    const double d_draw = draw_unknown ? t.meas_d.back() : t.mean_d;
+    // publish_static_ 는 '정적 장애물을 하류로 내보낼지' 를 정하는 값이므로
+    // 정적/미정에만 건다. 동적은 이 값과 무관하게 항상 그린다.
+    if ((is_unknown || is_static) && !publish_static_) continue;
+
+    // 좌표: 정적만 평균을 쓴다(제자리에 있으니 평균이 더 안정적).
+    // 동적/미정은 움직이므로 평균이 의미가 없다 - 가장 최근 측정을 쓴다.
+    const double s_draw = is_static ? t.mean_s : t.meas_s.back();
+    const double d_draw = is_static ? t.mean_d : t.meas_d.back();
     auto xy = sdToXY(s_draw, d_draw);
 
     visualization_msgs::msg::Marker m;
     m.header.frame_id = "map";
     m.header.stamp    = current_stamp_;
-    m.ns  = draw_static ? "tracked_static" : "tracked_unknown";
+    m.ns  = is_static  ? "tracked_static"
+          : is_dynamic ? "tracked_dynamic"
+                       : "tracked_unknown";
     m.id  = t.id;
     m.type = visualization_msgs::msg::Marker::SPHERE;
 
@@ -851,8 +870,9 @@ private:
     else             { m.scale.x = m.scale.y = m.scale.z = 0.25; }
 
     m.color.a = 0.5;
-    if (draw_unknown) { m.color.r = 1.0; m.color.g = 0.0; m.color.b = 1.0; } // magenta (unknown)
-    if (draw_static)  { m.color.r = 0.0; m.color.g = 1.0; m.color.b = 0.0; } // green (static)
+    if (is_static)       { m.color.r = 0.0; m.color.g = 1.0; m.color.b = 0.0; } // 초록 = 정적
+    else if (is_dynamic) { m.color.r = 1.0; m.color.g = 0.0; m.color.b = 0.0; } // 빨강 = 동적
+    else                 { m.color.r = 1.0; m.color.g = 0.0; m.color.b = 1.0; } // 자홍 = 미정
 
     m.pose.orientation.w = 1.0;
     m.pose.position.x = xy.first;
@@ -862,6 +882,9 @@ private:
   }
 
   // (B) EKF 상대 차량 마커 (항상 별도 ns: "opponent")
+  //   위 tracked_dynamic 과 같은 물체를 가리키며 색도 같은 빨강이다 — 하나는 측정,
+  //   하나는 EKF 추정이라 둘이 조금 어긋나 보이는 것이 정상이다. 구분해서 보려면
+  //   rviz 의 Namespaces 에서 opponent 를 끄면 된다.
   if (opponent_.isInitialised && checkInFront(opponent_.x(0))) {
     const double s_c = wrap_s_coord(opponent_.x(0), track_length_);
     auto xy = sdToXY(s_c, opponent_.x(2));
@@ -884,10 +907,9 @@ private:
     arr.markers.push_back(m);
   }
 
-  // 3) 새 마커들 게시
-  if (!arr.markers.empty()) {
-    static_dynamic_marker_pub_->publish(arr);
-  }
+  // 3) 게시. DELETEALL 이 항상 첫 원소로 들어 있으므로 빈 메시지가 되는 경우는 없고,
+  //    "지울 것만 있는 사이클" 도 이 한 번의 publish 로 처리된다.
+  static_dynamic_marker_pub_->publish(arr);
 }
 
   // void publishMarkers(){

@@ -86,6 +86,31 @@ public:
         //   runOnline 이 그걸 통째로 폐기해 빈 경로가 나갔다(obs_debug_0820_1348 실측 73.6%).
         //   true 면 그런 해가 애초에 생성되지 않는다 -> 나온 경로는 항상 안전, 못 찾으면 진짜 없음.
         this->declare_parameter<bool>("hard_block_nodes", true);
+
+        // ---- 스플라인 충돌 검사 (2026-08-22) ----------------------------
+        // 노드 차단은 '검문소(layer)에서 어느 칸을 고를지' 만 제약한다. 실제로 발행되는
+        // 것은 그 노드들을 이은 스플라인 위의 샘플점이고, 그 곡선 자체는 아무도 보지
+        // 않았다. 레이어 간격(hall_0822 실측 0.80 m)이 장애물 크기(0.34~0.41 m)보다
+        // 크기 때문에, 양 끝 노드가 자유여도 사이 구간이 장애물을 지날 수 있다.
+        //
+        // 실측 (obs_debug_0822_1431, 419 s):
+        //   발행된 otwpnts 1209개 중 155개(12.8%)가 차체 반폭 여유조차 없었다.
+        //   그중 85%가 '첫 엣지'(경로 시작~0.80 m) 안에서 일어났고,
+        //   65.9%는 경로의 첫 점부터 이미 장애물 안이었다.
+        //   원인: findDestination 이 시작 노드를 차의 현재 (s,d) 로 잡으면서 그 노드가
+        //   차단 노드인지 보지 않고, 아래 PATH_BLOCKED 검사도 index 0 을 면제한다.
+        //   layer_at_s 가 '최근접' 레이어를 돌려주므로 장애물이 차 앞 반 레이어 안에
+        //   있으면 차 자신의 레이어에 배정되고 = 그게 곧 면제되는 레이어다.
+        this->declare_parameter<bool>("spline_check", true);
+        // 충돌이 나면 그 구간 하류 노드를 빼고 몇 번까지 다시 풀지.
+        // 0 이면 재탐색 없이 바로 빈 경로(= 예전 PATH_BLOCKED 거동).
+        // 실측상 침범 상황의 82.1% 는 좌우 어느 한쪽에 통과 가능한 공간이 있었으므로
+        // 재탐색이 대부분 대안을 찾는다. 나머지 17.9% 는 실제로 폭이 부족한 경우다.
+        this->declare_parameter<int>("spline_check_retries", 3);
+        // 검사를 면제할 '차 앞' 거리 [m]. 0 이하면 veh_length/2 를 쓴다.
+        // 이 거리 안의 충돌은 이미 피할 수 없는 것이라, 버려도 대안이 나오지 않고
+        // 경로만 사라진다(그 구간의 대응은 감속이지 조향이 아니다).
+        this->declare_parameter<double>("spline_check_skip_m", 1.0);
         // ---- 속도 비례 safety_margin (2026-08-04 신규) ----------------------
         // 고속일수록 pose 오차와 추종 오차가 커지므로 회피선을 장애물에서 더 멀리 돌린다.
         // obs_debug_0804_2103 실측: 나란히 지나간 1019 프레임의 표면 여유 중앙이
@@ -161,6 +186,9 @@ public:
         min_safety_margin_  = this->get_parameter("min_safety_margin").as_double();
         block_obs_tail_layer_ = this->get_parameter("block_obs_tail_layer").as_bool();
         hard_block_nodes_     = this->get_parameter("hard_block_nodes").as_bool();
+        spline_check_         = this->get_parameter("spline_check").as_bool();
+        spline_check_retries_ = this->get_parameter("spline_check_retries").as_int();
+        spline_check_skip_m_  = this->get_parameter("spline_check_skip_m").as_double();
         safety_margin_hi_   = this->get_parameter("safety_margin_hi").as_double();
         sm_v_lo_            = this->get_parameter("sm_v_lo").as_double();
         sm_v_hi_            = this->get_parameter("sm_v_hi").as_double();
@@ -263,6 +291,9 @@ private:
     int min_plan_horizon_;
     double obs_traj_tresh_;
     double closest_obs_;
+    bool   spline_check_{true};
+    int    spline_check_retries_{3};
+    double spline_check_skip_m_{0.0};
     double obs_lookahead_;
     double obs_delay_d_;
     double safety_margin_;
@@ -344,6 +375,16 @@ private:
                 hard_block_nodes_ = p.as_bool();
                 RCLCPP_INFO(get_logger(), "hard_block_nodes updated: %s",
                             hard_block_nodes_ ? "true" : "false");
+            } else if (p.get_name() == "spline_check") {
+                spline_check_ = p.as_bool();
+                RCLCPP_INFO(get_logger(), "spline_check updated: %s",
+                            spline_check_ ? "true" : "false");
+            } else if (p.get_name() == "spline_check_retries") {
+                spline_check_retries_ = p.as_int();
+                RCLCPP_INFO(get_logger(), "spline_check_retries updated: %d", spline_check_retries_);
+            } else if (p.get_name() == "spline_check_skip_m") {
+                spline_check_skip_m_ = p.as_double();
+                RCLCPP_INFO(get_logger(), "spline_check_skip_m updated: %.3f", spline_check_skip_m_);
             } else if (p.get_name() == "layer_lookup_by_s") {
                 layer_lookup_by_s_ = p.as_bool();
                 RCLCPP_INFO(get_logger(), "layer_lookup_by_s updated: %d", (int)layer_lookup_by_s_);
@@ -728,8 +769,9 @@ private:
         }
         if (nodeArray.size() >= 2) lock_fail_ = 0;
 
-        // Edge COST 원상복구 (하드 프루닝이면 손댄 edge 가 없어 no-op)
-        nodeGraph.deactivateFiltering();
+        // ※ Edge COST 원상복구(deactivateFiltering)는 아래 스플라인 재탐색 루프가 끝난 뒤에
+        //   한다. 여기서 먼저 풀면 hard_block_nodes:=false(벌점 방식)일 때 재탐색이
+        //   장애물 벌점을 잃어버려 아무 제약 없이 다시 뚫는 해를 낸다.
     
         // RCLCPP_INFO(this->get_logger(), "ComputeSplines input: %zu nodes", nodeArray.size());
         if (nodeArray.size() < 2) {
@@ -769,58 +811,179 @@ private:
         //     nodeArray.back() = {check_layer, rl_idx};
         // }
 
-        // 현재 spline 상태 x 노드 시퀀스이므로 spline 게산을 위한 작업 실행
-        MatrixXd path(nodeArray.size(), 2);
-        // 경로를 Eigen::Matrix 타입으로 변경 
-        // 기존 node 구조체에 들어있는 x, y, psi 재사용
-        for (size_t i = 0; i < nodeArray.size(); ++i) {
-            auto [layer, idx] = nodeArray[i];
-            const ::Node &n = nodeMap[layer][idx];  
-            path(i, 0) = n.x;
-            path(i, 1) = n.y;
+        // ===== 노드 시퀀스 -> 스플라인 -> 충돌 검사 -> (필요하면) 재탐색 =====
+        // 위 PATH_BLOCKED 검사는 '노드' 만 본다. 실제로 발행되는 것은 노드를 이은 곡선
+        // 위의 샘플점이므로, 여기서 그 곡선을 장애물 zone 과 직접 대조한다.
+        // zone 은 이미 연속 실수 구간(z.s_lo/s_hi, z.d_lo/d_hi)이라 노드 격자로 반올림하는
+        // 손실이 없다. 걸리면 그 구간 하류 노드를 후보에서 빼고 다시 푼다 —
+        // '경로 1개를 뽑고 버리는' 것이 아니라 '나쁜 선택지를 빼고 다시 고르는' 것이라,
+        // 통과 가능한 공간이 있으면 대안이 나온다.
+        const double track_length = stMap[RL_S].back();
+
+        // b 에서 a 까지의 전방 거리 [0, L)
+        auto s_fwd = [&](double a, double b) {
+            double d = std::fmod(a - b, track_length);
+            if (d < 0.0) d += track_length;
+            return d;
+        };
+
+        // 탐색에서 제외할 노드 집합. 원래 차단(하드 프루닝/방향 잠금) 그대로이며,
+        // 스플라인 검사는 여기에 손대지 않는다(엣지 벌점으로 처리한다).
+        std::set<IPair> merged_blocked;
+        if (search_set) merged_blocked = *search_set;
+
+        std::vector<SplineSample> evasion_points;
+        std::vector<double> s_vec, d_all;
+        Eigen::VectorXd kappa, el_lengths;
+        int N = 0;
+        bool  path_ok = false;
+        IPair offending{-1,-1};
+
+        for (int attempt = 0; ; ++attempt) {
+            MatrixXd path(nodeArray.size(), 2);
+            for (size_t i = 0; i < nodeArray.size(); ++i) {
+                auto [layer, idx] = nodeArray[i];
+                const ::Node &n = nodeMap[layer][idx];
+                path(i, 0) = n.x;
+                path(i, 1) = n.y;
+            }
+            const double psi_s = nodeMap[nodeArray.front().first][nodeArray.front().second].psi;
+            const double psi_e = nodeMap[nodeArray.back().first][nodeArray.back().second].psi;
+
+            auto evasion_spline = nodeGraph.computeSplines(path, psi_s, psi_e, true);
+            if (evasion_spline->coeffs_x.size() == 0 || evasion_spline->coeffs_y.size() == 0) {
+                RCLCPP_WARN(this->get_logger(),
+                            "Skipping waypoint generation: empty spline coefficients (path too short)");
+                snap(FailSnapshot::SPLINE_EMPTY, {-1,-1});
+                return {wpnts, mrks};
+            }
+
+            evasion_points = nodeGraph.interpSpline(evasion_spline->coeffs_x,
+                                                    evasion_spline->coeffs_y);
+            N = (int)evasion_points.size();
+            if (N < 2) {
+                snap(FailSnapshot::SPLINE_EMPTY, {-1,-1});
+                return {wpnts, mrks};
+            }
+
+            kappa.resize(N);
+            el_lengths.resize(N - 1);
+            kappa(0) = evasion_points[0].kappa;
+            for (int i = 1; i < N; ++i) {
+                kappa(i) = evasion_points[i].kappa;
+                const double dx = evasion_points[i].x - evasion_points[i-1].x;
+                const double dy = evasion_points[i].y - evasion_points[i-1].y;
+                el_lengths(i-1) = std::hypot(dx, dy);
+            }
+
+            s_vec.assign(N, 0.0);
+            s_vec[0] = stMap[RL_S][nodeArray.front().first];   // 현재 위치 raceline s에서 시작
+            for (int i = 1; i < N; ++i) {
+                s_vec[i] = s_vec[i-1] + el_lengths(i-1);
+                if (s_vec[i] >= track_length) s_vec[i] -= track_length;  // wrap-around
+            }
+
+            // 배치 frenet 변환. 예전에는 아래 발행 루프에서 점마다 1개짜리 벡터로 N 번
+            // 호출했다(N 중앙 88). 한 번에 넘기는 쪽이 더 싸고, 그 결과를 검사와 발행이
+            // 함께 쓰므로 이 검사를 넣고도 총 계산량은 늘지 않는다.
+            {
+                std::vector<double> xs(N), ys(N);
+                for (int i = 0; i < N; ++i) { xs[i] = evasion_points[i].x; ys[i] = evasion_points[i].y; }
+                auto fr = converter->get_frenet(xs, ys, &s_vec);
+                d_all = fr.second;
+            }
+
+            if (!spline_check_ || zones.empty()) { path_ok = true; break; }
+
+            // ---- 발행될 곡선을 장애물 zone(연속 구간)과 대조 ----
+            // 여유는 m_min(= veh_width/2 + min_safety_margin) 을 쓴다. m_nom 을 쓰면
+            // 좁은 구간에서 layer 별로 정당하게 완화된 경로까지 전부 버리게 된다.
+            const double skip_m = (spline_check_skip_m_ > 0.0) ? spline_check_skip_m_
+                                                               : params.veh_length * 0.5;
+            int bad = -1;
+            for (int i = 0; i < N && bad < 0; ++i) {
+                // 차 바로 앞(반차장)은 면제. 차가 이미 장애물 옆에 붙어 있으면 이 구간은
+                // 늘 걸리고, 그러면 어떤 경로도 못 낸다. 예전 'index 0 면제'가 노드 한 칸
+                // (= 최대 0.80 m)이었던 것을 거리 기준(0.27 m)으로 좁힌 것이다.
+                if (s_fwd(s_vec[i], cur_s) < skip_m) continue;
+                for (const auto &z : zones) {
+                    if (s_fwd(s_vec[i], z.s_lo) > s_fwd(z.s_hi, z.s_lo)) continue;  // s 범위 밖
+                    if (d_all[i] >= z.d_lo - m_min && d_all[i] <= z.d_hi + m_min) { bad = i; break; }
+                }
+            }
+            if (bad < 0) { path_ok = true; break; }
+
+            if (attempt >= spline_check_retries_) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "스플라인이 장애물을 지난다 (전방 %.2f m, s=%.2f d=%.2f). 재탐색 %d회 모두 실패 -> 빈 경로",
+                    s_fwd(s_vec[bad], cur_s), s_vec[bad], d_all[bad], spline_check_retries_);
+                break;
+            }
+
+            // ---- 충돌한 '엣지' 에 벌점을 주고 다시 푼다 ----------------------
+            // ★ 2026-08-22 수정: 예전에는 도착 '노드' 를 후보에서 뺐다. 그건 틀렸다 —
+            //   충돌은 노드가 아니라 두 노드를 잇는 곡선(엣지)의 성질이고, 그 노드 자체는
+            //   다른 앞 노드에서 오면 멀쩡할 수 있다. 노드를 빼면 멀쩡한 선택지가 사라지고,
+            //   장애물이 이미 그 레이어를 대부분 막아 자유 노드가 1~2개뿐일 때는
+            //   생존자를 지워 통로를 스스로 끊는다.
+            //   실측(obs_debug_0822_2017 재생): 노드 제외 방식에서 재탐색이
+            //   "경로 노드 0개" 로 죽은 것이 14건, 3회를 다 쓰고 실패한 것이 42건이었다.
+            //   엣지 벌점은 apply_node_filter 가 쓰는 기계(splineMap[src][dst].cost +
+            //   orig_edges 복원)를 그대로 재사용하므로 추가 자료구조가 없다.
+            //   복원은 루프 뒤의 deactivateFiltering() 이 한다.
+            size_t k = 1;
+            for (; k < nodeArray.size(); ++k) {
+                if (s_fwd(stMap[RL_S][nodeArray[k].first], s_vec[bad]) < track_length * 0.5) break;
+            }
+            if (k >= nodeArray.size()) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "스플라인 충돌인데 벌점 줄 하류 엣지가 없다 -> 빈 경로 (s=%.2f)", s_vec[bad]);
+                break;
+            }
+            const IPair e_src = nodeArray[k-1];
+            const IPair e_dst = nodeArray[k];
+
+            auto &sm = nodeGraph.getSplineMap();
+            auto it_src = sm.find(e_src);
+            if (it_src == sm.end() || it_src->second.find(e_dst) == it_src->second.end()) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "스플라인 충돌 엣지를 splineMap 에서 못 찾음 -> 빈 경로");
+                break;
+            }
+            {
+                double &ec = it_src->second[e_dst].cost;
+                // 원래 비용은 한 번만 기록한다(이미 apply_node_filter 가 건드렸을 수도 있다).
+                if (nodeGraph.orig_edges.find({e_src, e_dst}) == nodeGraph.orig_edges.end())
+                    nodeGraph.orig_edges[{e_src, e_dst}] = ec;
+                // 벌점은 1e6 이 아니라 1e9 를 쓴다. 이 그래프의 정상 비용 상한은
+                // w_virt_goal(1e4) + w_curv_avg(7e3) 수준이라 1e6 이면 충분해 보이지만,
+                // 재탐색을 여러 번 하면 벌점이 쌓인 엣지끼리 비교가 되므로 여유를 크게 둔다.
+                ec += 1e9;
+            }
+            offending = e_dst;
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                "스플라인이 장애물을 지나 엣지(L%d,%d)->(L%d,%d) 벌점 후 재탐색 (%d회차, 전방 %.2f m)",
+                e_src.first, e_src.second, e_dst.first, e_dst.second,
+                attempt + 1, s_fwd(s_vec[bad], cur_s));
+
+            nodeArray = nodeGraph.graph_search(startIdx, endIdx.first, nodeIndicesOnRaceline,
+                                               this->get_logger(), true, &merged_blocked);
+            if (nodeArray.size() < 2) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    "스플라인 충돌 회피 재탐색 실패 (경로 노드 %zu개) -> 빈 경로", nodeArray.size());
+                break;
+            }
         }
-        double psi_s = nodeMap[nodeArray.front().first][nodeArray.front().second].psi;
-        double psi_e = nodeMap[nodeArray.back().first][nodeArray.back().second].psi;
 
-        // 최소 비용 경로의 뼈대인 노드 시퀀스를 구간별 spline으로 잇는 작업
-        auto evasion_spline = nodeGraph.computeSplines(path, psi_s, psi_e, true);
+        // Edge COST 원상복구 (하드 프루닝이면 손댄 edge 가 없어 no-op)
+        nodeGraph.deactivateFiltering();
 
-        if (evasion_spline->coeffs_x.size() == 0 || evasion_spline->coeffs_y.size() == 0) {
-            RCLCPP_WARN(this->get_logger(),
-                        "Skipping waypoint generation: empty spline coefficients (path too short)");
-            snap(FailSnapshot::SPLINE_EMPTY, {-1,-1});
+        if (!path_ok) {
+            snap(FailSnapshot::PATH_BLOCKED, offending);
             return {wpnts, mrks};
         }
 
-        // 토픽으로 내보내기 위해 spline 위 점 sampling
-        auto evasion_points = nodeGraph.interpSpline(evasion_spline->coeffs_x,
-                                                evasion_spline->coeffs_y);
-        
-        // 곡률/구간거리(el_lengths) 계산
-        int N = (int)evasion_points.size();
-        Eigen::VectorXd kappa(N);
-        Eigen::VectorXd el_lengths(N-1);
-        
-        kappa(0) = evasion_points[0].kappa;
-        for (int i=1;i<N;++i) {
-            kappa(i) = evasion_points[i].kappa;
-            double dx = evasion_points[i].x - evasion_points[i-1].x;
-            double dy = evasion_points[i].y - evasion_points[i-1].y;
-            el_lengths(i-1) = std::hypot(dx, dy);
-        }
-
-        // s 누적 벡터 계산
         auto [cur_layer, cur_idx] = nodeArray.front();
-        
-        std::vector<double> s_vec(N);
-        s_vec[0] = stMap[RL_S][cur_layer];   // 현재 위치 raceline s에서 시작
-        double track_length = stMap[RL_S].back();
-        for (int i = 1; i < N; ++i) {
-            s_vec[i] = s_vec[i-1] + el_lengths(i-1);
-                if (s_vec[i] >= track_length) {
-                    s_vec[i] -= track_length; // wrap-around 처리
-                }
-        }
 
         // 속도 프로파일 생성
         auto [end_layer, end_idx] = nodeArray.back();
@@ -857,16 +1020,10 @@ private:
 
         // fill wpnts
         for (int i=0; i<N; ++i) {
-            std::vector<double> xs = {evasion_points[i].x};
-            std::vector<double> ys = {evasion_points[i].y};
-            std::vector<double> s_hint = {s_vec[i]};
-
-            auto result = converter->get_frenet(xs, ys, &s_hint);
-            auto& d_vec = result.second;
-
+            // frenet 은 위에서 배치로 한 번에 구해 뒀다 (검사와 공유).
             double psi = std::atan2(evasion_points[i].y_d, evasion_points[i].x_d);
             auto w = xypsi_to_wpnt(evasion_points[i].x, evasion_points[i].y,
-                                s_vec[i], d_vec[0],
+                                s_vec[i], d_all[i],
                                 psi, kappa(i),
                                 vx(i), ax(i), i);
             wpnts.wpnts.push_back(w);

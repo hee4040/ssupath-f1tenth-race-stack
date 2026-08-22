@@ -145,9 +145,31 @@ PP_Controller::waypoint_at_distance_before_car(double distance,
   return Vec2{ waypoints[idx][0], waypoints[idx][1] };
 }
 
-std::pair<double,double> PP_Controller::calc_lateral_error_norm() const {
+std::pair<double,double> PP_Controller::calc_lateral_error_norm() {
+  // 경로(wp_)까지의 부호 있는 횡오차를 먼저 구해 둔다.
+  // lat_err_from_path 와 무관하게 항상 갱신한다 - 아래 횡오차 보정 항이 이 값을 쓴다.
+  cross_track_signed_ = 0.0;
+  if (!wp_.empty()) {
+    const int idx = nearest_waypoint({pose_[0], pose_[1]}, wp_);
+    if (idx >= 0) {
+      const double dx  = wp_[idx][0] - pose_[0];
+      const double dy  = wp_[idx][1] - pose_[1];
+      const double yaw = pose_[2];
+      // 차 기준 좌측 법선 (-sin yaw, cos yaw) 성분.
+      // eta 계산과 같은 부호 규약이라 양수 = 왼쪽 = 양의 조향.
+      cross_track_signed_ = (-std::sin(yaw))*dx + (std::cos(yaw))*dy;
+    }
+  }
+
+  // lateral_error 는 lookahead 하한(calc_L1_point)과 감속(speed_adjust_lat_err)에 쓰인다.
+  //   경로 기준(기본)  : 회피 중에도 "경로를 잘 따라가면" 작다 -> 방해하지 않는다
+  //   레이싱라인 기준  : 예전 동작. 회피 중엔 항상 커져 lookahead 를 늘리고 감속시킨다
   double lateral_error = 0.0;
-  if (frenet_) lateral_error = std::abs((*frenet_)[1]); // d
+  if (lat_err_from_path) {
+    lateral_error = std::abs(cross_track_signed_);
+  } else if (frenet_) {
+    lateral_error = std::abs((*frenet_)[1]); // d
+  }
   const double max_lat_e = 0.5, min_lat_e = 0.0;
   const double lat_e_clip = clip(lateral_error, min_lat_e, max_lat_e);
   const double lat_e_norm = 0.5 * ((lat_e_clip - min_lat_e) / (max_lat_e - min_lat_e));
@@ -353,6 +375,25 @@ double PP_Controller::calc_steering_angle(const Vec2& L1_point,
 
   // 0715: velocity-based scaling(steer *= 1+v/10) 제거 —
   // 속도에 비례해 이득을 키워 위빙(1.8Hz 리밋사이클)을 유발하던 항
+
+  // ---- 횡오차 보정 항 (2026-08-21) ---------------------------------------
+  // 순수추종만으로는 lookahead 가 길어질수록 경로 복귀력이 제곱으로 약해진다
+  // (steer ~ 2*wheelbase*e / L1^2). 실측(obs_debug_0821_2001): 5 m/s 에서 0.3 m
+  // 벗어난 뒤 1초가 지나도 오차가 105% 남았고, 그때 접지력은 3.4 m/s^2 이나
+  // 남아 있었다. 못 간 게 아니라 조향을 안 넣은 것이다.
+  //
+  // 이 항은 경로 위에 있으면 정확히 0 이라 전역주행 위빙에 기여하지 않고,
+  // 벗어났을 때만 작용한다. 그래서 lookahead 를 줄이지 않고도 복귀가 빨라진다.
+  // 끄려면 ct_gain 을 0 으로 두면 된다(계산 자체를 건너뛴다).
+  //
+  // 스케일 감각(ct_gain=0.5, 오차 0.5 m): 2 m/s -> 0.124 rad, 5 m/s -> 0.050 rad.
+  // 속도로 나누는 이유는 같은 조향각이 만드는 횡가속도가 v^2 에 비례하기 때문이다.
+  if (ct_gain > 1e-9) {
+    const double v_ct = std::max(speed_now_, std::max(0.1, ct_v_min));
+    double corr = std::atan2(ct_gain * cross_track_signed_, v_ct);
+    corr = clip(corr, -std::abs(ct_max_rad), std::abs(ct_max_rad));
+    steer += corr;
+  }
 
   // rate limit
   steer = clip(steer, curr_steering_angle_ - steer_rate_thresh, curr_steering_angle_ + steer_rate_thresh);

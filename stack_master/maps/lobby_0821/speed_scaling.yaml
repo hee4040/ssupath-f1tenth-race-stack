@@ -59,18 +59,18 @@ sector_tuner:
     Sector9:
       start: 291
       end: 323
-      scaling: 0.6
+      scaling: 0.65
       only_FTG: false
       no_FTG: false
     Sector10:
       start: 324
       end: 388
-      scaling: 0.6
+      scaling: 0.65
       only_FTG: false
       no_FTG: false
     Sector11:
       start: 389
       end: 419
-      scaling: 0.6
+      scaling: 0.65
       only_FTG: false
       no_FTG: false

@@ -19,7 +19,28 @@ state_machine:
     splini_ttl: 3. # [s] ttl counter for validity of spliner waypoints -> NOW DYNAMIC RECONFIGURABLE
 
     gb_ego_width_m: 0.4 # [m], distance from gb path for rejoining 
-    lateral_width_gb_m: 0.8 # [m] lateral width within which we consider obstacles to be on the overtaking line -> NOW DYNAMIC RECONFIGURABLE
+    # [m] 장애물 '표면' 에서 이만큼 안으로 들어오면 전방이 막힌 것으로 보고 감속한다.
+    #     판정식: |obs.d_center| < obs.size/2 + lateral_width_gb_m   (_check_gbfree)
+    #
+    # ★ 2026-08-22: 의미가 바뀌었다. 예전에는 장애물 크기를 안 세고 중심 d 만 이 값과
+    #   비교했다(= '레이스라인 기준 코리도 반폭'). 지금은 lateral_width_ot_m 과 같은 꼴,
+    #   즉 '장애물 표면에서의 여유' 다. 그래서 값도 0.8 -> 0.30 으로 내렸다.
+    #   그냥 0.8 을 두면 예전보다 훨씬 넓어져서 온 트랙이 감속 대상이 된다.
+    #
+    # 실측 (obs_debug_0822_2017, 전방 6.9 m 안 장애물-프레임 21620개.
+    #       '놓친 충돌' = 레이스라인 그대로 가면 실제로 겹치는데 감속을 안 하는 경우):
+    #     구 규칙 |d| < 0.80         : 감속 85.1%  놓침 0  (그중 45.0% 가 불필요했다)
+    #     |d| < size/2 + 0.50        : 감속 80.6%  놓침 0
+    #     |d| < size/2 + 0.35        : 감속 66.6%  놓침 0
+    #     |d| < size/2 + 0.30        : 감속 62.2%  놓침 0   <- 채택
+    #     |d| < size/2 + 0.25        : 감속 58.8%  놓침 0
+    #     |d| < size/2 + 0.20        : 감속 54.2%  놓침 0
+    #   0.25 밑도 이 백에서는 놓친 충돌이 0 이지만, 차체 반폭이 0.14 라 여유가 0.1 m 밖에
+    #   안 남는다. 퍼셉션 오차(회전 왜곡: 3 m 지점 p90 0.49 m)를 감안해 0.30 을 골랐다.
+    #   감속이 여전히 잦으면 0.25 까지는 내려도 이 백 기준 안전 손실이 없다.
+    #
+    # ※ 같은 값이 _check_recover_path_free(후진 전 후방 장애물 검사)에도 쓰인다.
+    lateral_width_gb_m: 0.20 # -> NOW DYNAMIC RECONFIGURABLE
     # TRAILING(=감속) 진입 거리.
     # ★ 2026-08-04: 10.0 으로 올렸다가 원복. 이 값을 올려도 소용이 없다 —
     #   퍼셉션의 진짜 상한은 passthrough_filter_node.param.yaml 의 크롭 박스
@@ -124,14 +145,44 @@ state_machine:
     #   후진 중 조이스틱 개입(R1 토글 / Circle e-stop)은 mux_controller 에서 그대로 살아 있다.
     recover_enabled: True
 
-    # 진입 조건: TRAILING + 속도 < recover_stall_speed_mps + 회피 웨이포인트 없음 +
-    #            전방에 장애물 있음(gb_free False) 이 recover_stall_time_sec 동안 연속 지속.
+    # 진입 조건: 전방에 장애물이 있고(gb_free False) TRAILING 인 상태가
+    #            recover_stall_time_sec 동안 연속 지속 + 그 윈도우 동안 실제 이동거리가
+    #            recover_stall_travel_m 미만.
     # 전방 장애물 조건이 있어야 출발 직전(정지 상태)이나 사람이 세워 둔 경우에 후진하지 않는다.
-    recover_stall_speed_mps: 0.15  # [m/s]
-    recover_stall_time_sec: 2.0    # [s]
+    #
+    # ★ 2026-08-22: 판정 기준을 "플래너가 해를 못 냈다" -> "차가 실제로 못 갔다" 로 바꿨다.
+    #   기존 조건 중 recover_stall_speed_mps(순간속도)와 no_solution(otwpnts 빈 배열)을
+    #   빼고, 윈도우 내 순변위 하나로 합쳤다. 근거는 state_machine.py 의 정지 복구 섹션
+    #   주석에 A/B 표까지 정리해 두었다. 요약하면 —
+    #     · otwpnts 는 정상 주행 중에도 63~89% 가 빈 메시지라 판정 신호가 못 된다.
+    #     · 그걸 거르려고 쓰던 splini_ttl 3 s 래치 때문에 교착의 43% 를 놓치고 있었다
+    #       (플래너가 쓸모없는 해를 간헐적으로 뱉으면 래치가 계속 갱신된다).
+    #     · 이동거리 기준은 "해가 생겨서 차가 움직이기 시작하면 조건이 즉시 깨진다" 라
+    #       '곧 해가 나올지' 를 추측할 필요가 없다. 결과로 판정한다.
+    #   5개 백(1373 s)에 구현 로직을 그대로 재생한 실측:
+    #     설정                    발동  오발동  교착검출   발동지연 med / max
+    #     구 규칙(래치3s+정지2s)    10    0%   4/7 (57%)   1.98 / 4.25 s
+    #     1.5 s / 0.10 m (현재)    22   36%   6/7 (86%)   1.48 / 1.93 s
+    #     2.0 s / 0.10 m           17   24%   6/7 (86%)   1.98 / 2.63 s
+    #     1.0 s / 0.10 m           32   44%   6/7 (86%)   0.98 / 1.30 s
+    #
+    # 헛발(오발동)이 잦으면 여기부터 2.0 으로 올릴 것 — 교착 검출은 그대로 86% 고
+    # 오발동만 36% -> 24% 로 준다. 오발동 8건은 전부 발동 후 1.8 s 안에 차가 스스로
+    # 나간 경우라, 윈도우를 늘리는 것이 정확히 그 구간을 걷어낸다.
+    #
+    # ※ 놓친 1건은 문턱 문제가 아니다 — NDT 위치가 정지 상태에서 1.84 m 튄 구간이라
+    #   '움직였다' 로 읽혔다(VESC 휠 오도메트리는 같은 구간 변위 0.00 m). 자세한 내용은
+    #   state_machine.py 의 정지 복구 섹션 주석 참고.
+    recover_stall_time_sec: 1.5    # [s] 판정 윈도우 = 그대로 후진까지의 지연이다
 
-    recover_distance_m: 1.5        # [m] 후진할 거리 (시작 지점에서의 유클리드 변위로 판정)
-    recover_speed_mps: 0.8         # [m/s] 후진 명령 속도의 크기 (부호는 코드에서 음수로)
+    # 위 윈도우 동안 이만큼도 못 갔으면 '못 가고 있다' 로 본다.
+    # 1.5 s 에 0.10 m = 평균 0.067 m/s. 라이다/NDT 위치 노이즈(수 cm)보다 충분히 크고,
+    # 기어가듯 전진하는 상태(예: 0.2 m/s -> 1.5 s 에 0.30 m)는 확실히 걸러진다.
+    # 왕복해서 제자리로 돌아온 경우도 0 에 가깝게 잡히는데 그건 의도한 동작이다.
+    recover_stall_travel_m: 0.10   # [m]
+
+    recover_distance_m: 0.8        # [m] 후진할 거리 (시작 지점에서의 유클리드 변위로 판정)
+    recover_speed_mps: 2.0         # [m/s] 후진 명령 속도의 크기 (부호는 코드에서 음수로)
                                    # l1_controller.yaml 의 reverse_speed_max 와 반드시 같이 올릴 것
                                    # (둘 중 작은 쪽이 실효 상한이다)
     recover_timeout_sec: 6.0       # [s] 이 시간이 지나면 거리를 못 채웠어도 후진 종료
@@ -140,7 +191,7 @@ state_machine:
     recover_dwell_sec: 0.3         # [s]
 
     # 후진용 로컬 웨이포인트 개수 (중심선 간격 0.1 m). 후진거리 + lookahead 여유를 덮어야 한다.
-    recover_n_wpnts: 40            # 4.0 m
+    recover_n_wpnts: 30            # 4.0 m
 
     # 기하 검사: 후진 경로상의 중심선 점에서 min(d_left, d_right) 가 이 값보다 커야 한다.
     # 반차폭(0.14) + 여유. 이보다 좁으면 후진을 포기하고 그냥 TRAILING 으로 남는다.
